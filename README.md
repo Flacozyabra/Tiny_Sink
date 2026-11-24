@@ -1,34 +1,31 @@
-# Tiny_Sink
+# <img src="assets/Tiny_Sink.png" width="32" height="32" alt=""> TinySink
 
-Легковесное минималистичное Windows-приложение для системного трея на Rust (Win32 + Core Audio API, без тяжёлых GUI-фреймворков).
+Tiny Windows tray volume indicator & double-click audio output switcher in Rust.
 
-## Возможности
-- **Динамическая иконка в трее**:
-  - показывает **наушники** или **динамик** в зависимости от активного устройства вывода (`PKEY_AudioEndpoint_FormFactor` + эвристика по имени);
-  - отображает уровень текущей громкости (`0–100`, честное компактное `100`) и состояние **Mute**;
-  - автоматически подстраивается под DPI панели задач (`16×16`, `20×20`, `24×24`, `32×32`) и светлую/тёмную тему Windows.
-- **Быстрое управление с мыши**:
-  - **одиночный левый клик** открывает всплывающий регулятор громкости над треем (ползунок, кнопка Mute по клику на значок и скролл);
-  - **двойной левый клик** переключает устройство вывода звука по кругу среди устройств, отмеченных в «Устройства» (как в SoundSwitch);
-  - **колёсико мыши** при наведении на иконку в трее меняет громкость с шагом `2%` и автоматически снимает Mute при увеличении.
-- **Контекстное меню (ПКМ)**:
-  - автоматически адаптируется под светлую и тёмную тему Windows (`AllowDark` через `uxtheme.dll`);
-  - в верхней части отображает только выбранные в «Устройства» устройства для быстрого переключения;
-  - **«Устройства...»** — компактное тёмное окно с чекбоксами, которое не закрывается при переключении нескольких устройств;
-  - ручное переопределение типа значка для каждого устройства (`Авто` / `Наушники` / `Колонки`);
-  - быстрый переход в Параметры панели задач Windows (`ms-settings:taskbar` для вкл/выкл стандартной иконки громкости), автозапуск (`HKCU\...\Run\Tiny_Sink`), подменю **Update** (автопроверка и обновление в один клик) и выход.
-- **Минимальное потребление ресурсов**: событийный мониторинг (`IMMNotificationClient` + `IAudioEndpointVolumeCallback`) без фонового опроса, встроенная иконка приложения и единый автономный `.exe`.
+[English](#english) · [Русский](#русский)
 
-## Скачать
-Готовый `Tiny_Sink.exe`, ZIP-архив для Windows (x64) и контрольные суммы `SHA256SUMS.txt` публикуются на странице [Releases](https://github.com/Flacozyabra/Tiny_Sink/releases/latest).
+---
 
-## Сборка и запуск
-```powershell
-cargo test
-cargo build --release
-```
-Готовый исполняемый файл: `target\release\Tiny_Sink.exe`.
+## English
 
-## Лицензия
-Проект распространяется под лицензией [MIT](LICENSE).
+- **Dynamic tray icon** — shows headphones or speakers, live volume (`0–100`), and **Mute** state; adapts to taskbar DPI and light/dark Windows themes.
+- **Mouse controls**:
+  - **Left-click** — compact volume flyout slider above the tray (with mute toggle and wheel support).
+  - **Double-click** — cycle through checked playback devices.
+  - **Scroll wheel** — adjust volume by `±2%` (auto-unmutes when scrolling up).
+- **Context menu (right-click)** — quick device list, **Devices...** persistent checklist, **Device icon type** override (`Auto` / `Headphones` / `Speakers`), **Start with Windows**, Windows volume icon shortcut, and **Update** submenu (auto-check & one-click `SHA-256` verified updates).
+- **Lightweight** — native Win32 + Core Audio API, event-driven with zero polling, single portable `.exe`.
 
+---
+
+## Русский
+
+Минималистичный индикатор громкости для трея Windows и переключатель аудиоустройств по двойному клику на Rust.
+
+- **Динамическая иконка в трее** — отображает наушники или колонки, громкость (`0–100`) и **Mute**; подстраивается под DPI панели задач и светлую/тёмную тему Windows.
+- **Управление мышью**:
+  - **ЛКМ** — компактный регулятор громкости над треем (ползунок, Mute и прокрутка).
+  - **Двойной ЛКМ** — циклическое переключение отмеченных устройств вывода.
+  - **Колёсико мыши** — изменение громкости с шагом `2%` (автоснятие Mute при увеличении).
+- **Контекстное меню (ПКМ)** — быстрый выбор устройства, окно **Devices...** с чекбоксами, выбор типа иконки (**Device icon type**: `Auto` / `Headphones` / `Speakers`), **Start with Windows**, переход в настройки громкости Windows и подменю **Update** (автопроверка и обновление в один клик с проверкой `SHA-256`).
+- **Минимальные ресурсы** — чистый Win32 + Core Audio API без фонового опроса, один портативный `.exe`.
