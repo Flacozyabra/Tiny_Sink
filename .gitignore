@@ -1,3 +1,6 @@
+# Agents
+.agent
+
 # Rust build artifacts
 /target/
 **/*.rs.bk
@@ -9,4 +12,3 @@
 Thumbs.db
 *.swp
 *.log
-
