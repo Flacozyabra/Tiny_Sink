@@ -38,19 +38,19 @@ struct ParsedHttpsUrl {
 fn parse_https_url(url: &str) -> Result<ParsedHttpsUrl, String> {
     let rest = url
         .strip_prefix("https://")
-        .ok_or_else(|| "Поддерживаются только HTTPS URL.".to_string())?;
+        .ok_or_else(|| "Only HTTPS URLs are supported.".to_string())?;
     let (authority, path_and_query) = match rest.find('/') {
         Some(idx) => (&rest[..idx], &rest[idx..]),
         None => (rest, "/"),
     };
     if authority.is_empty() {
-        return Err("Пустой хост в URL.".to_string());
+        return Err("Empty host in URL.".to_string());
     }
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) if !h.is_empty() && !h.contains(']') => {
             let parsed = p
                 .parse::<u16>()
-                .map_err(|_| "Некорректный порт в URL.".to_string())?;
+                .map_err(|_| "Invalid port in URL.".to_string())?;
             (h.to_string(), parsed)
         }
         _ => (authority.to_string(), 443),
@@ -81,13 +81,13 @@ fn open_https_request(
             0,
         ));
         if session.0.is_null() {
-            return Err("Не удалось инициализировать WinHTTP.".to_string());
+            return Err("Failed to initialize WinHTTP.".to_string());
         }
         let _ = WinHttpSetTimeouts(session.0, 10_000, 10_000, 15_000, 30_000);
 
         let connect = HInternet(WinHttpConnect(session.0, PCWSTR(host_w.as_ptr()), parsed.port, 0));
         if connect.0.is_null() {
-            return Err(format!("Не удалось подключиться к {}.", parsed.host));
+            return Err(format!("Failed to connect to {}.", parsed.host));
         }
 
         let request = HInternet(WinHttpOpenRequest(
@@ -100,15 +100,15 @@ fn open_https_request(
             WINHTTP_FLAG_SECURE,
         ));
         if request.0.is_null() {
-            return Err("Не удалось создать HTTPS-запрос.".to_string());
+            return Err("Failed to create HTTPS request.".to_string());
         }
 
         let header_units: Option<Vec<u16>> = headers.map(|h| h.encode_utf16().collect());
         WinHttpSendRequest(request.0, header_units.as_deref(), None, 0, 0, 0)
-            .map_err(|e| format!("Ошибка сети при отправке запроса: {e}"))?;
+            .map_err(|e| format!("Network error sending request: {e}"))?;
 
         WinHttpReceiveResponse(request.0, std::ptr::null_mut())
-            .map_err(|e| format!("Сервер не ответил вовремя: {e}"))?;
+            .map_err(|e| format!("Server did not respond in time: {e}"))?;
 
         let mut status: u32 = 0;
         let mut status_len = std::mem::size_of::<u32>() as u32;
@@ -121,15 +121,13 @@ fn open_https_request(
             &mut status_len,
             &mut idx,
         )
-        .map_err(|e| format!("Не удалось прочитать HTTP-статус: {e}"))?;
+        .map_err(|e| format!("Failed to read HTTP status code: {e}"))?;
 
         if !(200..300).contains(&status) {
             return Err(match status {
-                403 | 429 => {
-                    "Превышен лимит запросов GitHub API. Попробуйте чуть позже.".to_string()
-                }
-                404 => "Релиз или файл обновления не найден на GitHub (HTTP 404).".to_string(),
-                _ => format!("Сервер вернул HTTP {status}."),
+                403 | 429 => "GitHub API rate limit exceeded. Please try again later.".to_string(),
+                404 => "Release or asset not found on GitHub (HTTP 404).".to_string(),
+                _ => format!("Server returned HTTP {status}."),
             });
         }
 
@@ -171,7 +169,7 @@ pub(crate) fn http_get_string(
         let mut available: u32 = 0;
         unsafe {
             WinHttpQueryDataAvailable(request.0, &mut available)
-                .map_err(|e| format!("Ошибка чтения ответа: {e}"))?;
+                .map_err(|e| format!("Error reading response: {e}"))?;
         }
         if available == 0 {
             break;
@@ -187,21 +185,21 @@ pub(crate) fn http_get_string(
                     to_read as u32,
                     &mut read_now,
                 )
-                .map_err(|e| format!("Ошибка получения данных: {e}"))?;
+                .map_err(|e| format!("Error receiving data: {e}"))?;
             }
             if read_now == 0 {
                 break;
             }
             let n = read_now as usize;
             if data.len() + n > max_bytes {
-                return Err("Ответ сервера превышает допустимый размер.".to_string());
+                return Err("Server response exceeds maximum allowed size.".to_string());
             }
             data.extend_from_slice(&chunk[..n]);
             remaining = remaining.saturating_sub(n);
         }
     }
 
-    String::from_utf8(data).map_err(|_| "Ответ сервера не является корректным UTF-8.".to_string())
+    String::from_utf8(data).map_err(|_| "Server response is not valid UTF-8.".to_string())
 }
 
 pub(crate) fn http_download_to_file<F>(
@@ -218,7 +216,7 @@ where
     let total_bytes = query_content_length(&request);
 
     let mut file = File::create(dest)
-        .map_err(|e| DownloadOutcome::Error(format!("Не удалось создать временный файл: {e}")))?;
+        .map_err(|e| DownloadOutcome::Error(format!("Failed to create temporary file: {e}")))?;
 
     let mut downloaded_bytes: u64 = 0;
     let mut last_emit = Instant::now();
@@ -235,7 +233,7 @@ where
         let mut available: u32 = 0;
         unsafe {
             WinHttpQueryDataAvailable(request.0, &mut available)
-                .map_err(|e| DownloadOutcome::Error(format!("Ошибка сети при загрузке: {e}")))?;
+                .map_err(|e| DownloadOutcome::Error(format!("Network error while downloading: {e}")))?;
         }
         if available == 0 {
             break;
@@ -255,14 +253,14 @@ where
                     to_read as u32,
                     &mut read_now,
                 )
-                .map_err(|e| DownloadOutcome::Error(format!("Ошибка загрузки данных: {e}")))?;
+                .map_err(|e| DownloadOutcome::Error(format!("Failed reading download stream: {e}")))?;
             }
             if read_now == 0 {
                 break;
             }
             let n = read_now as usize;
             file.write_all(&chunk[..n])
-                .map_err(|e| DownloadOutcome::Error(format!("Ошибка записи на диск: {e}")))?;
+                .map_err(|e| DownloadOutcome::Error(format!("Failed writing update file to disk: {e}")))?;
             downloaded_bytes += n as u64;
             speed_window_bytes += n as u64;
             remaining = remaining.saturating_sub(n);
@@ -286,7 +284,7 @@ where
     }
 
     file.flush()
-        .map_err(|e| DownloadOutcome::Error(format!("Ошибка сохранения файла на диск: {e}")))?;
+        .map_err(|e| DownloadOutcome::Error(format!("Failed flushing update file to disk: {e}")))?;
 
     on_progress(DownloadProgress {
         downloaded_bytes,

@@ -279,9 +279,9 @@ impl TrayState {
             dwInfoFlags: NIIF_INFO,
             ..Default::default()
         };
-        write_utf16_slice(&mut nid.szInfoTitle, "Tiny_Sink — доступно обновление");
+        write_utf16_slice(&mut nid.szInfoTitle, "Tiny_Sink — update available");
         let body = format!(
-            "Вышла версия {}. Нажмите на уведомление, чтобы установить.",
+            "Version {} is ready. Click this notification to install.",
             info.tag_name
         );
         write_utf16_slice(&mut nid.szInfo, &body);

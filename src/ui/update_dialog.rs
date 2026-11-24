@@ -107,12 +107,12 @@ impl UpdateDialogState {
 
     fn button_labels(&self) -> (&'static str, &'static str, bool) {
         match self.view {
-            UpdateDialogView::Checking { .. } => ("Скрыть", "", false),
-            UpdateDialogView::UpToDate { .. } => ("ОК", "", true),
-            UpdateDialogView::Available { .. } => ("Обновить", "Позже", true),
-            UpdateDialogView::Downloading { .. } => ("Отмена", "", false),
+            UpdateDialogView::Checking { .. } => ("Hide", "", false),
+            UpdateDialogView::UpToDate { .. } => ("OK", "", true),
+            UpdateDialogView::Available { .. } => ("Update", "Later", true),
+            UpdateDialogView::Downloading { .. } => ("Cancel", "", false),
             UpdateDialogView::Applying { .. } => ("", "", false),
-            UpdateDialogView::Error { .. } => ("Повторить", "Закрыть", true),
+            UpdateDialogView::Error { .. } => ("Retry", "Close", true),
         }
     }
 
@@ -141,15 +141,15 @@ impl UpdateDialogState {
 
         let (title, body, progress) = match &self.view {
             UpdateDialogView::Checking { current_version } => (
-                "Проверка обновлений...".to_string(),
+                "Checking for updates...".to_string(),
                 format!(
-                    "Текущая версия: v{current_version}\nЗапрос последнего релиза на GitHub..."
+                    "Current version: v{current_version}\nFetching latest release from GitHub..."
                 ),
                 None,
             ),
             UpdateDialogView::UpToDate { current_version } => (
-                "Обновления не требуются".to_string(),
-                format!("Установлена актуальная версия Tiny_Sink (v{current_version})."),
+                "You're up to date".to_string(),
+                format!("Tiny_Sink v{current_version} is already the latest version."),
                 None,
             ),
             UpdateDialogView::Available {
@@ -157,16 +157,16 @@ impl UpdateDialogState {
                 info,
             } => {
                 let mut desc = format!(
-                    "Текущая версия: v{current_version}  ->  Новая: {}",
+                    "Current version: v{current_version}  ->  New: {}",
                     info.tag_name
                 );
                 if !info.notes.is_empty() {
                     desc.push_str("\n\n");
                     desc.push_str(&info.notes);
                 } else {
-                    desc.push_str(&format!("\nФайл релиза: {}", info.exe_name));
+                    desc.push_str(&format!("\nRelease asset: {}", info.exe_name));
                 }
-                (format!("Доступно обновление {}", info.tag_name), desc, None)
+                (format!("Update {} available", info.tag_name), desc, None)
             }
             UpdateDialogView::Downloading {
                 version,
@@ -179,22 +179,22 @@ impl UpdateDialogState {
                 let speed = format_speed(*speed_bps);
                 let info_line = if *total_bytes > 0 {
                     let total_mb = (*total_bytes as f64) / (1024.0 * 1024.0);
-                    format!("Загружено: {dl_mb:.2} МБ из {total_mb:.2} МБ  •  {speed}")
+                    format!("Downloaded: {dl_mb:.2} MB of {total_mb:.2} MB  •  {speed}")
                 } else {
-                    format!("Загружено: {dl_mb:.2} МБ  •  {speed}")
+                    format!("Downloaded: {dl_mb:.2} MB  •  {speed}")
                 };
                 (
-                    format!("Загрузка обновления v{version}..."),
+                    format!("Downloading v{version}..."),
                     info_line,
                     Some((*percent, *total_bytes > 0)),
                 )
             }
             UpdateDialogView::Applying { version } => (
-                format!("Установка v{version}..."),
-                "Проверка SHA-256 и перезапуск Tiny_Sink...".to_string(),
+                format!("Installing v{version}..."),
+                "Verifying SHA-256 and restarting Tiny_Sink...".to_string(),
                 Some((100, true)),
             ),
-            UpdateDialogView::Error { message } => ("Ошибка обновления".to_string(), message.clone(), None),
+            UpdateDialogView::Error { message } => ("Update error".to_string(), message.clone(), None),
         };
 
         draw_text(
@@ -263,7 +263,7 @@ impl UpdateDialogState {
             let bar_label = if known_total {
                 format!("{pct}%")
             } else {
-                "Загрузка...".to_string()
+                "Downloading...".to_string()
             };
             let label_color = if fill_w > bar_w / 2 {
                 colors.btn_text
@@ -387,13 +387,13 @@ impl UpdateDialogState {
 
 fn format_speed(speed_bps: f64) -> String {
     if speed_bps <= 1.0 {
-        "вычисляется...".to_string()
+        "calculating...".to_string()
     } else if speed_bps < 1024.0 {
-        format!("{speed_bps:.0} Б/с")
+        format!("{speed_bps:.0} B/s")
     } else if speed_bps < 1024.0 * 1024.0 {
-        format!("{:.1} КБ/с", speed_bps / 1024.0)
+        format!("{:.1} KB/s", speed_bps / 1024.0)
     } else {
-        format!("{:.1} МБ/с", speed_bps / (1024.0 * 1024.0))
+        format!("{:.1} MB/s", speed_bps / (1024.0 * 1024.0))
     }
 }
 
@@ -419,7 +419,7 @@ impl UpdateDialog {
             };
             let _ = RegisterClassExW(&wc);
 
-            let title = to_wide_null("Обновление — Tiny_Sink");
+            let title = to_wide_null("Update — Tiny_Sink");
             let hwnd = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 PCWSTR(class_name.as_ptr()),

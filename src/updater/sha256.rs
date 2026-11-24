@@ -122,13 +122,13 @@ impl Sha256 {
 /// Computes lowercase hex SHA-256 digest of a file on disk.
 pub fn sha256_file_hex(path: &Path) -> Result<String, String> {
     let mut file = File::open(path)
-        .map_err(|e| format!("Не удалось открыть файл для проверки SHA-256: {e}"))?;
+        .map_err(|e| format!("Failed to open file for SHA-256 check: {e}"))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
         let n = file
             .read(&mut buf)
-            .map_err(|e| format!("Ошибка чтения файла при расчёте SHA-256: {e}"))?;
+            .map_err(|e| format!("Failed to read file for SHA-256 check: {e}"))?;
         if n == 0 {
             break;
         }

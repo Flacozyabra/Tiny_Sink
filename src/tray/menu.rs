@@ -53,9 +53,9 @@ impl TrayState {
 
             if selected_devices.is_empty() {
                 let msg = if self.snapshot.devices.is_empty() {
-                    "Нет активных устройств вывода"
+                    "No active output devices"
                 } else {
-                    "Устройства не выбраны (см. «Устройства...»)"
+                    "No devices selected (see Devices...)"
                 };
                 let wide = to_wide_null(msg);
                 let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(wide.as_ptr()));
@@ -65,8 +65,8 @@ impl TrayState {
                     next_id += 1;
                     let kind = self.config.effective_kind(&dev.id, dev.detected_kind);
                     let kind_tag = match kind {
-                        DeviceKind::Headphones => "Наушники",
-                        DeviceKind::Speakers => "Колонки",
+                        DeviceKind::Headphones => "Headphones",
+                        DeviceKind::Speakers => "Speakers",
                     };
                     let label = format!("{} [{}]", dev.name, kind_tag);
                     let wide = to_wide_null(&label);
@@ -79,7 +79,7 @@ impl TrayState {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
             // Non-closing checklist dialog for selecting managed devices.
-            let devices_label = to_wide_null("Устройства...");
+            let devices_label = to_wide_null("Devices...");
             let _ = AppendMenuW(
                 menu,
                 MF_STRING,
@@ -103,13 +103,13 @@ impl TrayState {
                     if let Ok(dev_menu) = CreatePopupMenu() {
                         let current_ovr = self.config.override_for(&dev.id);
                         let auto_kind = match dev.detected_kind {
-                            DeviceKind::Headphones => "Авто (Наушники)",
-                            DeviceKind::Speakers => "Авто (Колонки)",
+                            DeviceKind::Headphones => "Auto (Headphones)",
+                            DeviceKind::Speakers => "Auto (Speakers)",
                         };
                         for (label_str, ovr) in [
                             (auto_kind, IconOverride::Auto),
-                            ("Наушники", IconOverride::Headphones),
-                            ("Колонки", IconOverride::Speakers),
+                            ("Headphones", IconOverride::Headphones),
+                            ("Speakers", IconOverride::Speakers),
                         ] {
                             let cmd_id = next_id;
                             next_id += 1;
@@ -137,7 +137,7 @@ impl TrayState {
                     }
                 }
                 if list.is_empty() {
-                    let empty = to_wide_null("Нет устройств");
+                    let empty = to_wide_null("No devices");
                     let _ = AppendMenuW(
                         icons_menu,
                         MF_STRING | MF_GRAYED,
@@ -145,7 +145,7 @@ impl TrayState {
                         PCWSTR(empty.as_ptr()),
                     );
                 }
-                let title = to_wide_null("Тип значка устройства");
+                let title = to_wide_null("Device icon type");
                 let _ = AppendMenuW(
                     menu,
                     MF_POPUP,
@@ -157,7 +157,7 @@ impl TrayState {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
             // Safe link to Windows 10/11 system tray icons toggle page.
-            let sys_tray_label = to_wide_null("Системный значок громкости Windows...");
+            let sys_tray_label = to_wide_null("Windows system volume icon...");
             let _ = AppendMenuW(
                 menu,
                 MF_STRING,
@@ -167,7 +167,7 @@ impl TrayState {
             actions.push((CMD_OPEN_WIN_TRAY_SETTINGS, MenuAction::OpenSystemVolumeSettings));
 
             // Autostart with Windows.
-            let autostart_label = to_wide_null("Запускать с Windows");
+            let autostart_label = to_wide_null("Start with Windows");
             let autostart_flags = MF_STRING
                 | if is_autostart_enabled() {
                     MF_CHECKED
@@ -186,9 +186,9 @@ impl TrayState {
             if let Ok(update_menu) = CreatePopupMenu() {
                 if let Some(info) = &self.available_update {
                     let install_text = if self.download_handle.is_some() {
-                        format!("Открыть загрузку {}...", info.tag_name)
+                        format!("Open download {}...", info.tag_name)
                     } else {
-                        format!("Установить {}...", info.tag_name)
+                        format!("Install {}...", info.tag_name)
                     };
                     let wide = to_wide_null(&install_text);
                     let _ = AppendMenuW(
@@ -202,7 +202,7 @@ impl TrayState {
                 }
 
                 if self.update_checking {
-                    let checking_wide = to_wide_null("Идёт проверка обновлений...");
+                    let checking_wide = to_wide_null("Checking for updates...");
                     let _ = AppendMenuW(
                         update_menu,
                         MF_STRING | MF_GRAYED,
@@ -210,7 +210,7 @@ impl TrayState {
                         PCWSTR(checking_wide.as_ptr()),
                     );
                 } else {
-                    let check_wide = to_wide_null(&format!("Проверить сейчас (v{APP_VERSION})"));
+                    let check_wide = to_wide_null(&format!("Check now (v{APP_VERSION})"));
                     let _ = AppendMenuW(
                         update_menu,
                         MF_STRING,
@@ -220,7 +220,7 @@ impl TrayState {
                     actions.push((CMD_UPDATE_CHECK_NOW, MenuAction::CheckForUpdatesManual));
                 }
 
-                let auto_wide = to_wide_null("Проверять автоматически");
+                let auto_wide = to_wide_null("Check automatically");
                 let auto_flags = MF_STRING
                     | if self.config.auto_check_updates {
                         MF_CHECKED
@@ -236,7 +236,7 @@ impl TrayState {
                 actions.push((CMD_UPDATE_TOGGLE_AUTO, MenuAction::ToggleAutoUpdates));
 
                 let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
-                let releases_wide = to_wide_null("Открыть релизы на GitHub...");
+                let releases_wide = to_wide_null("Open GitHub Releases...");
                 let _ = AppendMenuW(
                     update_menu,
                     MF_STRING,
@@ -246,7 +246,7 @@ impl TrayState {
                 actions.push((CMD_UPDATE_OPEN_RELEASES, MenuAction::OpenReleasesPage));
 
                 let top_title = if self.available_update.is_some() {
-                    "Update • доступно обновление"
+                    "Update • update available"
                 } else {
                     "Update"
                 };
@@ -259,7 +259,7 @@ impl TrayState {
                 );
             }
 
-            let exit_label = to_wide_null("Выход");
+            let exit_label = to_wide_null("Exit");
             let _ = AppendMenuW(
                 menu,
                 MF_STRING,

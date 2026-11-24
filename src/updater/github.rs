@@ -74,17 +74,17 @@ struct GhAssetPayload {
 /// Parses GitHub `/releases/latest` JSON into validated `ReleaseInfo`.
 pub fn parse_github_release_json(json_text: &str) -> Result<ReleaseInfo, String> {
     let payload: GhReleasePayload = serde_json::from_str(json_text)
-        .map_err(|e| format!("Ошибка разбора ответа GitHub: {e}"))?;
+        .map_err(|e| format!("Failed to parse GitHub response: {e}"))?;
 
     if payload.draft || payload.prerelease {
-        return Err("Последний релиз помечен как черновик или пререлиз.".to_string());
+        return Err("Latest release is marked as draft or prerelease.".to_string());
     }
 
     let tag_name = payload
         .tag_name
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| "В ответе GitHub отсутствует tag_name.".to_string())?;
+        .ok_or_else(|| "GitHub response is missing tag_name.".to_string())?;
 
     let html_url = payload
         .html_url
@@ -115,7 +115,7 @@ pub fn parse_github_release_json(json_text: &str) -> Result<ReleaseInfo, String>
     }
 
     let (exe_name, exe_url) = exe_asset.or(fallback_exe).ok_or_else(|| {
-        format!("В релизе {tag_name} не найден исполняемый файл {EXPECTED_ASSET_NAME}.")
+        format!("Executable {EXPECTED_ASSET_NAME} not found in release {tag_name}.")
     })?;
 
     let version = tag_name.trim_start_matches(['v', 'V']).to_string();
@@ -165,16 +165,16 @@ pub fn verify_sha256_sums(
         .find(|(_, name)| name.eq_ignore_ascii_case(target_filename))
         .map(|(hash, _)| hash)
         .ok_or_else(|| {
-            format!("В {CHECKSUMS_ASSET_NAME} отсутствует контрольная сумма для {target_filename}.")
+            format!("Checksum for {target_filename} not found in {CHECKSUMS_ASSET_NAME}.")
         })?;
 
     if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(format!("Некорректный формат хэша в {CHECKSUMS_ASSET_NAME}."));
+        return Err(format!("Invalid SHA-256 format in {CHECKSUMS_ASSET_NAME}."));
     }
 
     if expected != actual_sha256.to_ascii_lowercase() {
         return Err(format!(
-            "Контрольная сумма SHA-256 не совпадает (ожидалось {expected}, получено {actual_sha256})."
+            "SHA-256 mismatch (expected {expected}, got {actual_sha256})."
         ));
     }
 

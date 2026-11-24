@@ -364,12 +364,12 @@ fn single_click_delay_ms() -> u32 {
 
 fn build_tooltip(snapshot: &AudioSnapshot, kind: DeviceKind) -> String {
     let kind_label = match kind {
-        DeviceKind::Headphones => "Наушники",
-        DeviceKind::Speakers => "Колонки",
+        DeviceKind::Headphones => "Headphones",
+        DeviceKind::Speakers => "Speakers",
     };
     if snapshot.muted {
         format!(
-            "{}% (Без звука) — {} • {}",
+            "{}% (Muted) — {} • {}",
             snapshot.volume_percent, kind_label, snapshot.default_device_name
         )
     } else {

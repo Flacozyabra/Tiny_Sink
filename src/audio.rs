@@ -205,7 +205,7 @@ impl AudioMonitor {
             .iter()
             .find(|d| d.is_default)
             .map(|d| (d.name.clone(), d.detected_kind))
-            .unwrap_or_else(|| ("Нет аудиоустройства".to_string(), DeviceKind::Speakers));
+            .unwrap_or_else(|| ("No audio output device".to_string(), DeviceKind::Speakers));
 
         let (volume_percent, muted) = self.read_volume_and_mute();
 

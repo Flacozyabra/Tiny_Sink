@@ -134,17 +134,17 @@ pub fn spawn_download_thread(
     info: ReleaseInfo,
 ) -> Result<DownloadHandle, String> {
     let current_exe =
-        std::env::current_exe().map_err(|e| format!("Не найден путь к исполняемому файлу: {e}"))?;
+        std::env::current_exe().map_err(|e| format!("Failed to resolve executable path: {e}"))?;
     let dest_dir = current_exe
         .parent()
-        .ok_or_else(|| "Некорректный каталог исполняемого файла.".to_string())?;
+        .ok_or_else(|| "Invalid executable directory.".to_string())?;
     let staged_path = dest_dir.join(STAGED_NEW_NAME);
 
     // Fail fast if folder is read-only (e.g. Program Files without elevation).
     let probe_path = dest_dir.join(".tiny_sink_write_probe.tmp");
     if let Err(e) = File::create(&probe_path) {
         return Err(format!(
-            "Нет прав записи в папку программы ({}). Переместите Tiny_Sink.exe в пользовательскую папку или обновите вручную:\n{e}",
+            "No write permission in program folder ({}). Move Tiny_Sink.exe to a writable folder or update manually:\n{e}",
             dest_dir.display()
         ));
     }
@@ -192,7 +192,7 @@ where
     F: FnMut(DownloadProgress),
 {
     let max_retries = 3;
-    let mut last_err = DownloadOutcome::Error("Неизвестная ошибка загрузки.".to_string());
+    let mut last_err = DownloadOutcome::Error("Unknown download error.".to_string());
 
     for attempt in 0..max_retries {
         if cancel_flag.load(Ordering::Acquire) {
@@ -228,7 +228,7 @@ where
             Err(err) => {
                 let _ = fs::remove_file(staged_path);
                 return DownloadOutcome::Error(format!(
-                    "Не удалось скачать {CHECKSUMS_ASSET_NAME} для проверки целостности:\n{err}"
+                    "Failed to download {CHECKSUMS_ASSET_NAME} for integrity check:\n{err}"
                 ));
             }
         };
@@ -251,10 +251,10 @@ where
 /// Replaces the running binary with `staged_new` and spawns the updated process with `--finish-update <pid>`.
 pub fn apply_staged_update_and_launch(staged_new: &Path) -> Result<(), String> {
     let current_exe =
-        std::env::current_exe().map_err(|e| format!("Не найден путь текущего exe: {e}"))?;
+        std::env::current_exe().map_err(|e| format!("Failed to resolve current executable: {e}"))?;
     let dest_dir = current_exe
         .parent()
-        .ok_or_else(|| "Некорректный каталог exe.".to_string())?;
+        .ok_or_else(|| "Invalid executable directory.".to_string())?;
     let old_exe = dest_dir.join(BACKUP_OLD_NAME);
 
     if old_exe.exists() {
@@ -263,13 +263,13 @@ pub fn apply_staged_update_and_launch(staged_new: &Path) -> Result<(), String> {
 
     fs::rename(&current_exe, &old_exe).map_err(|e| {
         let _ = fs::remove_file(staged_new);
-        format!("Не удалось переименовать текущий исполняемый файл:\n{e}")
+        format!("Failed to rename current executable:\n{e}")
     })?;
 
     if let Err(e) = fs::rename(staged_new, &current_exe) {
         let _ = fs::rename(&old_exe, &current_exe);
         let _ = fs::remove_file(staged_new);
-        return Err(format!("Не удалось переместить обновлённый файл:\n{e}"));
+        return Err(format!("Failed to place updated executable:\n{e}"));
     }
 
     let pid_arg = std::process::id().to_string();
@@ -282,7 +282,7 @@ pub fn apply_staged_update_and_launch(staged_new: &Path) -> Result<(), String> {
         let _ = fs::rename(&current_exe, staged_new);
         let _ = fs::rename(&old_exe, &current_exe);
         return Err(format!(
-            "Новая версия применена, но не удалось запустить обновлённый процесс (выполнен откат):\n{e}"
+            "Updated executable was staged, but launching it failed (rolled back):\n{e}"
         ));
     }
 

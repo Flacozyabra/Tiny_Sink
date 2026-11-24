@@ -97,7 +97,7 @@ impl DevicesDialogState {
 
         draw_text(
             hdc,
-            "Отметьте устройства для меню и цикла 2× клика:",
+            "Select devices for menu and double-click cycle:",
             RECT {
                 left: scale_px(16, dpi),
                 top: scale_px(10, dpi),
@@ -112,7 +112,7 @@ impl DevicesDialogState {
         if self.rows.is_empty() {
             draw_text(
                 hdc,
-                "Активные устройства вывода не найдены",
+                "No active output devices found",
                 RECT {
                     left: scale_px(16, dpi),
                     top: scale_px(48, dpi),
@@ -210,7 +210,7 @@ impl DevicesDialogState {
         fill_round_rect(hdc, btn_rc, scale_px(6, dpi), btn_fill, None);
         draw_text(
             hdc,
-            "Готово",
+            "Done",
             btn_rc,
             colors.btn_text,
             btn_font,
@@ -247,7 +247,7 @@ impl DevicesDialog {
             };
             let _ = RegisterClassExW(&wc);
 
-            let title = to_wide_null("Устройства — Tiny_Sink");
+            let title = to_wide_null("Devices — Tiny_Sink");
             let hwnd = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 PCWSTR(class_name.as_ptr()),
