@@ -41,8 +41,8 @@ pub struct EndpointSummary {
     pub is_display_output: bool,
 }
 
-/// Persisted user settings stored under `%APPDATA%\VolumeSmartIcon\config.json`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Persisted user settings stored under `%APPDATA%\Tiny_Sink\config.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
     /// True once initial default device selection has been established.
@@ -51,6 +51,22 @@ pub struct AppConfig {
     pub cycle_device_ids: Vec<String>,
     /// Per-endpoint manual icon overrides.
     pub icon_overrides: HashMap<String, IconOverride>,
+    /// Whether automatic background update checks run on startup and every 24 hours.
+    pub auto_check_updates: bool,
+    /// Unix timestamp (seconds) of the last completed update check attempt.
+    pub last_update_check_unix: u64,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            cycle_initialized: false,
+            cycle_device_ids: Vec::new(),
+            icon_overrides: HashMap::new(),
+            auto_check_updates: true,
+            last_update_check_unix: 0,
+        }
+    }
 }
 
 impl AppConfig {
@@ -374,9 +390,12 @@ mod tests {
         let path = dir.join("config.json");
 
         let mut cfg = AppConfig::default();
+        assert!(cfg.auto_check_updates);
         cfg.cycle_initialized = true;
         cfg.cycle_device_ids = vec!["{0.0.0.0}.{123}".into()];
         cfg.set_override("{0.0.0.0}.{123}", IconOverride::Headphones);
+        cfg.auto_check_updates = false;
+        cfg.last_update_check_unix = 1_700_000_000;
 
         save_config(&path, &cfg).expect("save config");
         let loaded = load_config(&path);
@@ -386,6 +405,12 @@ mod tests {
             loaded.override_for("{0.0.0.0}.{123}"),
             IconOverride::Headphones
         );
+        assert!(!loaded.auto_check_updates);
+        assert_eq!(loaded.last_update_check_unix, 1_700_000_000);
+
+        let partial: AppConfig = serde_json::from_str("{}").expect("partial config");
+        assert!(partial.auto_check_updates);
+        assert_eq!(partial.last_update_check_unix, 0);
 
         let _ = fs::remove_dir_all(&dir);
     }

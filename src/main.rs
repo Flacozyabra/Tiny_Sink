@@ -8,6 +8,7 @@ mod icon;
 mod policy_config;
 mod tray;
 mod ui;
+mod updater;
 
 use config::to_wide_null;
 use windows::core::PCWSTR;
@@ -57,6 +58,7 @@ fn acquire_single_instance() -> Option<MutexGuard> {
 }
 
 fn main() {
+    updater::handle_startup_update_args();
     let Some(_instance_guard) = acquire_single_instance() else {
         return;
     };

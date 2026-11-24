@@ -10,8 +10,15 @@ use crate::config::{
 use crate::icon::create_tray_hicon;
 use crate::policy_config::set_default_audio_endpoint;
 use crate::ui::{
-    DevicesDialog, VolumeFlyout, WM_APP_DEVICES_TOGGLE_ID, WM_APP_FLYOUT_SET_VOLUME,
-    WM_APP_FLYOUT_TOGGLE_MUTE, WM_APP_WHEEL_VOLUME,
+    DevicesDialog, UpdateDialog, UpdateDialogView, VolumeFlyout, WM_APP_DEVICES_TOGGLE_ID,
+    WM_APP_FLYOUT_SET_VOLUME, WM_APP_FLYOUT_TOGGLE_MUTE, WM_APP_UPDATE_CANCEL_DOWNLOAD,
+    WM_APP_UPDATE_RETRY_CHECK, WM_APP_UPDATE_START_DOWNLOAD, WM_APP_WHEEL_VOLUME,
+};
+use crate::updater::{
+    apply_staged_update_and_launch, now_unix_secs, spawn_check_thread, spawn_download_thread,
+    DownloadHandle, DownloadOutcome, DownloadProgress, ReleaseInfo, UpdateCheckOutcome, APP_VERSION,
+    RELEASES_PAGE_URL, WM_APP_UPDATE_CHECK_DONE, WM_APP_UPDATE_DOWNLOAD_DONE,
+    WM_APP_UPDATE_PROGRESS,
 };
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -34,8 +41,9 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::Shell::{
-    ShellExecuteW, Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP,
-    NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER,
+    ShellExecuteW, Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE,
+    NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIN_BALLOONUSERCLICK, NOTIFYICONDATAW,
+    NOTIFYICONIDENTIFIER,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
@@ -53,6 +61,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const WM_APP_TRAY: u32 = WM_APP + 10;
 const TRAY_ICON_ID: u32 = 1;
 const TIMER_LMB_SINGLE_CLICK: usize = 1;
+const TIMER_AUTO_UPDATE_STARTUP: usize = 2;
+const TIMER_AUTO_UPDATE_PERIODIC: usize = 3;
+const AUTO_UPDATE_STARTUP_DELAY_MS: u32 = 15_000;
+const AUTO_UPDATE_INTERVAL_MS: u32 = 86_400_000;
 
 const WINDOW_CLASS_NAME: &str = "TinySinkTrayWindow";
 const PERSONALIZE_SUBKEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
@@ -62,6 +74,10 @@ const CMD_OPEN_DEVICES: u32 = 4001;
 const CMD_OPEN_WIN_TRAY_SETTINGS: u32 = 4002;
 const CMD_TOGGLE_AUTOSTART: u32 = 4003;
 const CMD_EXIT: u32 = 4004;
+const CMD_UPDATE_INSTALL: u32 = 4010;
+const CMD_UPDATE_CHECK_NOW: u32 = 4011;
+const CMD_UPDATE_TOGGLE_AUTO: u32 = 4012;
+const CMD_UPDATE_OPEN_RELEASES: u32 = 4013;
 
 /// Target tray window handle read by the low-level mouse hook for wheel scrolling.
 static HOOK_TRAY_HWND: AtomicUsize = AtomicUsize::new(0);
@@ -81,6 +97,10 @@ enum MenuAction {
     SetIconOverride(String, IconOverride),
     OpenSystemVolumeSettings,
     ToggleAutostart,
+    InstallAvailableUpdate,
+    CheckForUpdatesManual,
+    ToggleAutoUpdates,
+    OpenReleasesPage,
     Exit,
 }
 
@@ -98,6 +118,14 @@ struct TrayState {
     mouse_hook: Option<HHOOK>,
     flyout: Option<VolumeFlyout>,
     devices_dialog: Option<DevicesDialog>,
+    update_dialog: Option<UpdateDialog>,
+    available_update: Option<ReleaseInfo>,
+    notified_tag: Option<String>,
+    update_checking: bool,
+    pending_manual_feedback: bool,
+    download_handle: Option<DownloadHandle>,
+    download_gen: usize,
+    applying_update: bool,
     ignore_next_lbutton_up: bool,
     suppress_flyout_on_up: bool,
 }
@@ -128,6 +156,7 @@ impl TrayState {
         let mouse_hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_ll_proc), None, 0).ok() };
         let flyout = VolumeFlyout::create(hwnd);
         let devices_dialog = DevicesDialog::create(hwnd);
+        let update_dialog = UpdateDialog::create(hwnd);
 
         let mut state = Self {
             hwnd,
@@ -143,17 +172,47 @@ impl TrayState {
             mouse_hook,
             flyout,
             devices_dialog,
+            update_dialog,
+            available_update: None,
+            notified_tag: None,
+            update_checking: false,
+            pending_manual_feedback: false,
+            download_handle: None,
+            download_gen: 0,
+            applying_update: false,
             ignore_next_lbutton_up: false,
             suppress_flyout_on_up: false,
         };
         state.sync_child_windows();
         state.update_tray_icon(true);
+        state.configure_auto_update_timers();
         Ok(state)
     }
 
     fn save_config_to_disk(&self) {
         if let Some(path) = self.config_path.as_deref() {
             let _ = save_config(path, &self.config);
+        }
+    }
+
+    fn configure_auto_update_timers(&self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_AUTO_UPDATE_STARTUP);
+            let _ = KillTimer(Some(self.hwnd), TIMER_AUTO_UPDATE_PERIODIC);
+            if self.config.auto_check_updates {
+                let _ = SetTimer(
+                    Some(self.hwnd),
+                    TIMER_AUTO_UPDATE_STARTUP,
+                    AUTO_UPDATE_STARTUP_DELAY_MS,
+                    None,
+                );
+                let _ = SetTimer(
+                    Some(self.hwnd),
+                    TIMER_AUTO_UPDATE_PERIODIC,
+                    AUTO_UPDATE_INTERVAL_MS,
+                    None,
+                );
+            }
         }
     }
 
@@ -169,6 +228,9 @@ impl TrayState {
         }
         if let Some(dlg) = &self.devices_dialog {
             dlg.sync_devices(&self.snapshot.devices, &self.config);
+        }
+        if let Some(upd) = &self.update_dialog {
+            upd.refresh_theme();
         }
     }
 
@@ -247,7 +309,7 @@ impl TrayState {
             hIcon: new_hicon.or(self.current_hicon).unwrap_or_default(),
             ..Default::default()
         };
-        write_tooltip_utf16(&mut nid.szTip, &tooltip);
+        write_utf16_slice(&mut nid.szTip, &tooltip);
 
         let action = if self.icon_added { NIM_MODIFY } else { NIM_ADD };
         let ok = unsafe { Shell_NotifyIconW(action, &nid).as_bool() };
@@ -451,6 +513,84 @@ impl TrayState {
             );
             actions.push((CMD_TOGGLE_AUTOSTART, MenuAction::ToggleAutostart));
 
+            // Single top-level "Update" row with all update actions inside its dropdown submenu.
+            if let Ok(update_menu) = CreatePopupMenu() {
+                if let Some(info) = &self.available_update {
+                    let install_text = if self.download_handle.is_some() {
+                        format!("Открыть загрузку {}...", info.tag_name)
+                    } else {
+                        format!("Установить {}...", info.tag_name)
+                    };
+                    let wide = to_wide_null(&install_text);
+                    let _ = AppendMenuW(
+                        update_menu,
+                        MF_STRING,
+                        CMD_UPDATE_INSTALL as usize,
+                        PCWSTR(wide.as_ptr()),
+                    );
+                    actions.push((CMD_UPDATE_INSTALL, MenuAction::InstallAvailableUpdate));
+                    let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
+                }
+
+                if self.update_checking {
+                    let checking_wide = to_wide_null("Идёт проверка обновлений...");
+                    let _ = AppendMenuW(
+                        update_menu,
+                        MF_STRING | MF_GRAYED,
+                        0,
+                        PCWSTR(checking_wide.as_ptr()),
+                    );
+                } else {
+                    let check_wide =
+                        to_wide_null(&format!("Проверить сейчас (v{APP_VERSION})"));
+                    let _ = AppendMenuW(
+                        update_menu,
+                        MF_STRING,
+                        CMD_UPDATE_CHECK_NOW as usize,
+                        PCWSTR(check_wide.as_ptr()),
+                    );
+                    actions.push((CMD_UPDATE_CHECK_NOW, MenuAction::CheckForUpdatesManual));
+                }
+
+                let auto_wide = to_wide_null("Проверять автоматически");
+                let auto_flags = MF_STRING
+                    | if self.config.auto_check_updates {
+                        MF_CHECKED
+                    } else {
+                        MF_UNCHECKED
+                    };
+                let _ = AppendMenuW(
+                    update_menu,
+                    auto_flags,
+                    CMD_UPDATE_TOGGLE_AUTO as usize,
+                    PCWSTR(auto_wide.as_ptr()),
+                );
+                actions.push((CMD_UPDATE_TOGGLE_AUTO, MenuAction::ToggleAutoUpdates));
+
+                let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
+                let releases_wide = to_wide_null("Открыть релизы на GitHub...");
+                let _ = AppendMenuW(
+                    update_menu,
+                    MF_STRING,
+                    CMD_UPDATE_OPEN_RELEASES as usize,
+                    PCWSTR(releases_wide.as_ptr()),
+                );
+                actions.push((CMD_UPDATE_OPEN_RELEASES, MenuAction::OpenReleasesPage));
+
+                let top_title = if self.available_update.is_some() {
+                    "Update • доступно обновление"
+                } else {
+                    "Update"
+                };
+                let top_wide = to_wide_null(top_title);
+                let _ = AppendMenuW(
+                    menu,
+                    MF_POPUP,
+                    update_menu.0 as usize,
+                    PCWSTR(top_wide.as_ptr()),
+                );
+            }
+
             let exit_label = to_wide_null("Выход");
             let _ = AppendMenuW(
                 menu,
@@ -483,11 +623,30 @@ impl TrayState {
                 self.update_tray_icon(true);
             }
             MenuAction::OpenSystemVolumeSettings => {
-                open_windows_system_icons_settings();
+                open_shell_target("ms-settings:taskbar");
             }
             MenuAction::ToggleAutostart => {
                 let target = !is_autostart_enabled();
                 let _ = set_autostart_enabled(target);
+            }
+            MenuAction::InstallAvailableUpdate => {
+                self.open_available_update_dialog();
+            }
+            MenuAction::CheckForUpdatesManual => {
+                self.start_update_check(true);
+            }
+            MenuAction::ToggleAutoUpdates => {
+                self.config.auto_check_updates = !self.config.auto_check_updates;
+                self.save_config_to_disk();
+                self.configure_auto_update_timers();
+            }
+            MenuAction::OpenReleasesPage => {
+                let url = self
+                    .available_update
+                    .as_ref()
+                    .map(|u| u.html_url.as_str())
+                    .unwrap_or(RELEASES_PAGE_URL);
+                open_shell_target(url);
             }
             MenuAction::Exit => unsafe {
                 let _ = DestroyWindow(self.hwnd);
@@ -495,7 +654,263 @@ impl TrayState {
         }
     }
 
+    fn start_update_check(&mut self, manual: bool) {
+        if self.applying_update {
+            return;
+        }
+        if self.download_handle.is_some() {
+            if manual {
+                self.open_available_update_dialog();
+            }
+            return;
+        }
+        if manual {
+            if let Some(upd) = &self.update_dialog {
+                upd.set_view(
+                    UpdateDialogView::Checking {
+                        current_version: APP_VERSION.to_string(),
+                    },
+                    true,
+                );
+            }
+        }
+        if self.update_checking {
+            if manual {
+                self.pending_manual_feedback = true;
+            }
+            return;
+        }
+        self.update_checking = true;
+        self.pending_manual_feedback = manual;
+        spawn_check_thread(self.hwnd, manual);
+    }
+
+    fn open_available_update_dialog(&self) {
+        let Some(upd) = &self.update_dialog else {
+            return;
+        };
+        if self.download_handle.is_some() {
+            let ver = self
+                .available_update
+                .as_ref()
+                .map(|i| i.version.clone())
+                .unwrap_or_else(|| APP_VERSION.to_string());
+            upd.set_view(
+                UpdateDialogView::Downloading {
+                    version: ver,
+                    percent: 0,
+                    downloaded_bytes: 0,
+                    total_bytes: 0,
+                    speed_bps: 0.0,
+                },
+                true,
+            );
+            return;
+        }
+        if let Some(info) = self.available_update.clone() {
+            upd.set_view(
+                UpdateDialogView::Available {
+                    current_version: APP_VERSION.to_string(),
+                    info,
+                },
+                true,
+            );
+        }
+    }
+
+    fn handle_update_check_done(&mut self, manual: bool, outcome: UpdateCheckOutcome) {
+        self.update_checking = false;
+        let show_ui = manual
+            || std::mem::take(&mut self.pending_manual_feedback)
+            || self.update_dialog.as_ref().is_some_and(UpdateDialog::is_visible);
+
+        if matches!(
+            outcome,
+            UpdateCheckOutcome::UpToDate { .. } | UpdateCheckOutcome::Available(_)
+        ) {
+            self.config.last_update_check_unix = now_unix_secs();
+            self.save_config_to_disk();
+        }
+
+        match outcome {
+            UpdateCheckOutcome::Available(info) => {
+                let first_notice_for_tag = self.notified_tag.as_deref() != Some(info.tag_name.as_str());
+                self.available_update = Some(info.clone());
+                if show_ui {
+                    if let Some(upd) = &self.update_dialog {
+                        upd.set_view(
+                            UpdateDialogView::Available {
+                                current_version: APP_VERSION.to_string(),
+                                info,
+                            },
+                            true,
+                        );
+                    }
+                } else if first_notice_for_tag {
+                    self.notified_tag = Some(info.tag_name.clone());
+                    self.show_update_balloon(&info);
+                }
+            }
+            UpdateCheckOutcome::UpToDate { current } => {
+                self.available_update = None;
+                self.notified_tag = None;
+                if show_ui {
+                    if let Some(upd) = &self.update_dialog {
+                        upd.set_view(
+                            UpdateDialogView::UpToDate {
+                                current_version: current,
+                            },
+                            true,
+                        );
+                    }
+                }
+            }
+            UpdateCheckOutcome::Error(message) => {
+                if show_ui {
+                    if let Some(upd) = &self.update_dialog {
+                        upd.set_view(UpdateDialogView::Error { message }, true);
+                    }
+                }
+            }
+        }
+    }
+
+    fn start_update_download(&mut self) {
+        if self.download_handle.is_some() || self.applying_update {
+            return;
+        }
+        let Some(info) = self.available_update.clone() else {
+            return;
+        };
+        let version = info.version.clone();
+        let next_gen = self.download_gen.wrapping_add(1).max(1);
+        match spawn_download_thread(self.hwnd, next_gen, info) {
+            Ok(handle) => {
+                self.download_gen = next_gen;
+                self.download_handle = Some(handle);
+                if let Some(upd) = &self.update_dialog {
+                    upd.set_view(
+                        UpdateDialogView::Downloading {
+                            version,
+                            percent: 0,
+                            downloaded_bytes: 0,
+                            total_bytes: 0,
+                            speed_bps: 0.0,
+                        },
+                        true,
+                    );
+                }
+            }
+            Err(message) => {
+                if let Some(upd) = &self.update_dialog {
+                    upd.set_view(UpdateDialogView::Error { message }, true);
+                }
+            }
+        }
+    }
+
+    fn handle_download_progress(&self, gen_id: usize, prog: DownloadProgress) {
+        if gen_id != self.download_gen || self.download_handle.is_none() || self.applying_update {
+            return;
+        }
+        let percent = if prog.total_bytes > 0 {
+            ((prog.downloaded_bytes * 100) / prog.total_bytes).min(100) as u8
+        } else {
+            0
+        };
+        let version = self
+            .available_update
+            .as_ref()
+            .map(|i| i.version.clone())
+            .unwrap_or_else(|| APP_VERSION.to_string());
+        if let Some(upd) = &self.update_dialog {
+            upd.set_view(
+                UpdateDialogView::Downloading {
+                    version,
+                    percent,
+                    downloaded_bytes: prog.downloaded_bytes,
+                    total_bytes: prog.total_bytes,
+                    speed_bps: prog.speed_bps,
+                },
+                false,
+            );
+        }
+    }
+
+    fn cancel_update_download(&mut self) {
+        self.download_gen = self.download_gen.wrapping_add(1);
+        if let Some(handle) = self.download_handle.take() {
+            handle.cancel();
+        }
+    }
+
+    fn handle_download_done(&mut self, gen_id: usize, outcome: DownloadOutcome) {
+        if gen_id != self.download_gen {
+            return;
+        }
+        self.download_handle = None;
+        match outcome {
+            DownloadOutcome::Ready(staged_path) => {
+                self.applying_update = true;
+                let version = self
+                    .available_update
+                    .as_ref()
+                    .map(|i| i.version.clone())
+                    .unwrap_or_else(|| APP_VERSION.to_string());
+                if let Some(upd) = &self.update_dialog {
+                    upd.set_view(UpdateDialogView::Applying { version }, true);
+                }
+                match apply_staged_update_and_launch(&staged_path) {
+                    Ok(()) => {
+                        self.cleanup_resources();
+                        unsafe {
+                            let _ = DestroyWindow(self.hwnd);
+                        }
+                    }
+                    Err(message) => {
+                        self.applying_update = false;
+                        if let Some(upd) = &self.update_dialog {
+                            upd.set_view(UpdateDialogView::Error { message }, true);
+                        }
+                    }
+                }
+            }
+            DownloadOutcome::Cancelled => {}
+            DownloadOutcome::Error(message) => {
+                if let Some(upd) = &self.update_dialog {
+                    upd.set_view(UpdateDialogView::Error { message }, true);
+                }
+            }
+        }
+    }
+
+    fn show_update_balloon(&self, info: &ReleaseInfo) {
+        if !self.icon_added {
+            return;
+        }
+        let mut nid = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: self.hwnd,
+            uID: TRAY_ICON_ID,
+            uFlags: NIF_INFO,
+            dwInfoFlags: NIIF_INFO,
+            ..Default::default()
+        };
+        write_utf16_slice(&mut nid.szInfoTitle, "Tiny_Sink — доступно обновление");
+        let body = format!(
+            "Вышла версия {}. Нажмите на уведомление, чтобы установить.",
+            info.tag_name
+        );
+        write_utf16_slice(&mut nid.szInfo, &body);
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+        }
+    }
+
     fn cleanup_resources(&mut self) {
+        if let Some(handle) = self.download_handle.take() {
+            handle.cancel();
+        }
         HOOK_TRAY_HWND.store(0, Ordering::Release);
         if let Some(hhook) = self.mouse_hook.take() {
             unsafe {
@@ -532,9 +947,9 @@ impl Drop for TrayState {
     }
 }
 
-fn open_windows_system_icons_settings() {
+fn open_shell_target(target_uri: &str) {
     let verb = to_wide_null("open");
-    let target = to_wide_null("ms-settings:taskbar");
+    let target = to_wide_null(target_uri);
     unsafe {
         // Use modern UWP Settings (SystemSettings.exe) instead of legacy taskbarcpl.dll
         // which triggers an explorer.exe crash on minute ticks in Windows 10 19041.
@@ -639,8 +1054,11 @@ fn build_tooltip(snapshot: &AudioSnapshot, kind: DeviceKind) -> String {
     }
 }
 
-fn write_tooltip_utf16(dest: &mut [u16; 128], text: &str) {
+fn write_utf16_slice(dest: &mut [u16], text: &str) {
     dest.fill(0);
+    if dest.is_empty() {
+        return;
+    }
     let mut written = 0usize;
     for unit in text.encode_utf16() {
         if written >= dest.len() - 1 {
@@ -815,10 +1233,76 @@ unsafe extern "system" fn wnd_proc(
                 return LRESULT(0);
             }
             WM_TIMER => {
-                if wparam.0 == TIMER_LMB_SINGLE_CLICK {
-                    let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
+                match wparam.0 {
+                    TIMER_LMB_SINGLE_CLICK => {
+                        let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
+                        if let Ok(mut state) = state_rc.try_borrow_mut() {
+                            state.show_volume_flyout();
+                        }
+                    }
+                    TIMER_AUTO_UPDATE_STARTUP => {
+                        let _ = KillTimer(Some(hwnd), TIMER_AUTO_UPDATE_STARTUP);
+                        if let Ok(mut state) = state_rc.try_borrow_mut() {
+                            if state.config.auto_check_updates {
+                                state.start_update_check(false);
+                            }
+                        }
+                    }
+                    TIMER_AUTO_UPDATE_PERIODIC => {
+                        if let Ok(mut state) = state_rc.try_borrow_mut() {
+                            if state.config.auto_check_updates {
+                                state.start_update_check(false);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                return LRESULT(0);
+            }
+            WM_APP_UPDATE_CHECK_DONE => {
+                if lparam.0 != 0 {
+                    let outcome = *Box::from_raw(lparam.0 as *mut UpdateCheckOutcome);
+                    let manual = wparam.0 != 0;
                     if let Ok(mut state) = state_rc.try_borrow_mut() {
-                        state.show_volume_flyout();
+                        state.handle_update_check_done(manual, outcome);
+                    }
+                }
+                return LRESULT(0);
+            }
+            WM_APP_UPDATE_START_DOWNLOAD => {
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    state.start_update_download();
+                }
+                return LRESULT(0);
+            }
+            WM_APP_UPDATE_CANCEL_DOWNLOAD => {
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    state.cancel_update_download();
+                }
+                return LRESULT(0);
+            }
+            WM_APP_UPDATE_RETRY_CHECK => {
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    state.start_update_check(true);
+                }
+                return LRESULT(0);
+            }
+            WM_APP_UPDATE_PROGRESS => {
+                if lparam.0 != 0 {
+                    let prog = *Box::from_raw(lparam.0 as *mut DownloadProgress);
+                    let gen_id = wparam.0;
+                    if let Ok(state) = state_rc.try_borrow() {
+                        state.handle_download_progress(gen_id, prog);
+                    }
+                }
+                return LRESULT(0);
+            }
+            WM_APP_UPDATE_DOWNLOAD_DONE => {
+                if lparam.0 != 0 {
+                    let outcome = *Box::from_raw(lparam.0 as *mut DownloadOutcome);
+                    let gen_id = wparam.0;
+                    if let Ok(mut state) = state_rc.try_borrow_mut() {
+                        state.handle_download_done(gen_id, outcome);
                     }
                 }
                 return LRESULT(0);
@@ -870,6 +1354,11 @@ unsafe extern "system" fn wnd_proc(
                             state.suppress_flyout_on_up = false;
                             state.hide_volume_flyout();
                             state.cycle_next_device();
+                        }
+                    }
+                    NIN_BALLOONUSERCLICK => {
+                        if let Ok(state) = state_rc.try_borrow() {
+                            state.open_available_update_dialog();
                         }
                     }
                     WM_RBUTTONUP => {
@@ -926,6 +1415,8 @@ unsafe extern "system" fn wnd_proc(
             }
             WM_DESTROY => {
                 let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
+                let _ = KillTimer(Some(hwnd), TIMER_AUTO_UPDATE_STARTUP);
+                let _ = KillTimer(Some(hwnd), TIMER_AUTO_UPDATE_PERIODIC);
                 if let Ok(mut state) = state_rc.try_borrow_mut() {
                     state.cleanup_resources();
                 }
