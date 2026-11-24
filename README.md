@@ -19,6 +19,9 @@
   - быстрый переход в Параметры панели задач Windows (`ms-settings:taskbar` для вкл/выкл стандартной иконки громкости), автозапуск (`HKCU\...\Run\Tiny_Sink`) и выход.
 - **Минимальное потребление ресурсов**: событийный мониторинг (`IMMNotificationClient` + `IAudioEndpointVolumeCallback`) без фонового опроса, встроенная иконка приложения и единый автономный `.exe`.
 
+## Скачать
+Готовый `Tiny_Sink.exe`, ZIP-архив для Windows (x64) и контрольные суммы `SHA256SUMS.txt` публикуются на странице [Releases](https://github.com/Flacozyabra/Tiny_Sink/releases/latest).
+
 ## Сборка и запуск
 ```powershell
 cargo test
