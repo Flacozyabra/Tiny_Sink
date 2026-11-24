@@ -1,10 +1,4 @@
-# <img src="assets/Tiny_Sink.png" align="left" width="88" height="88" alt="">&nbsp;TinySink
-
-&nbsp;&nbsp;Tiny Windows tray app in Rust: shows headphones/speakers & volume, switches output on double-click.<br clear="left">
-
-[English](#english) · [Русский](#русский)
-
----
+# <img src="assets/Tiny_Sink.png" align="absmiddle" width="60" height="60" alt="">&nbsp;TinySink
 
 ## English
 
@@ -19,8 +13,6 @@
 ---
 
 ## Русский
-
-Минималистичный индикатор громкости для трея Windows и переключатель аудиоустройств по двойному клику на Rust.
 
 - **Динамическая иконка в трее** — отображает наушники или колонки, громкость (`0–100`) и **Mute**; подстраивается под DPI панели задач и светлую/тёмную тему Windows.
 - **Управление мышью**:
