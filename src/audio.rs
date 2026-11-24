@@ -54,6 +54,13 @@ pub struct AudioSnapshot {
     pub muted: bool,
 }
 
+/// Computes the updated volume percentage and mute state after a relative step.
+pub fn compute_adjusted_volume(current: u8, muted: bool, delta_percent: i16) -> (u8, bool) {
+    let next = (current as i16 + delta_percent).clamp(0, 100) as u8;
+    let next_muted = if delta_percent > 0 { false } else { muted };
+    (next, next_muted)
+}
+
 /// Pure heuristic combining Windows `EndpointFormFactor` and endpoint name keywords.
 pub fn classify_device(form_factor: EndpointFormFactor, friendly_name: &str) -> (DeviceKind, bool) {
     let is_display = form_factor == DigitalAudioDisplayDevice;
@@ -265,6 +272,37 @@ impl AudioMonitor {
         }
     }
 
+    /// Sets master volume `[0..=100]` on the default output device, optionally clearing mute.
+    pub fn set_volume_percent(&self, percent: u8, unmute: bool) {
+        if let Some(ep_vol) = self.endpoint_volume.as_ref() {
+            let scalar = (percent.min(100) as f32) / 100.0;
+            unsafe {
+                if unmute {
+                    let _ = ep_vol.SetMute(false, std::ptr::null());
+                }
+                let _ = ep_vol.SetMasterVolumeLevelScalar(scalar, std::ptr::null());
+            }
+        }
+    }
+
+    /// Adjusts master volume by `delta_percent`, automatically unmuting when increasing volume.
+    pub fn adjust_volume_percent(&self, delta_percent: i16) {
+        if delta_percent == 0 {
+            return;
+        }
+        let (cur, muted) = self.read_volume_and_mute();
+        let (next, next_muted) = compute_adjusted_volume(cur, muted, delta_percent);
+        if let Some(ep_vol) = self.endpoint_volume.as_ref() {
+            unsafe {
+                if muted && !next_muted {
+                    let _ = ep_vol.SetMute(false, std::ptr::null());
+                }
+                let _ = ep_vol
+                    .SetMasterVolumeLevelScalar((next as f32) / 100.0, std::ptr::null());
+            }
+        }
+    }
+
     fn clear_volume_subscription(&mut self) {
         if let (Some(ep_vol), Some(cb)) = (self.endpoint_volume.take(), self.volume_callback.take())
         {
@@ -431,6 +469,14 @@ mod tests {
             }
             CoUninitialize();
         }
+    }
+
+    #[test]
+    fn volume_adjustment_clamps_and_unmutes_on_increase() {
+        assert_eq!(compute_adjusted_volume(50, true, 2), (52, false));
+        assert_eq!(compute_adjusted_volume(100, true, 2), (100, false));
+        assert_eq!(compute_adjusted_volume(50, true, -2), (48, true));
+        assert_eq!(compute_adjusted_volume(1, false, -2), (0, false));
     }
 }
 

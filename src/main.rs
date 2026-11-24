@@ -7,6 +7,7 @@ mod config;
 mod icon;
 mod policy_config;
 mod tray;
+mod ui;
 
 use config::to_wide_null;
 use windows::core::PCWSTR;

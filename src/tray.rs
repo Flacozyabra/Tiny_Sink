@@ -1,4 +1,4 @@
-//! Win32 hidden message window, system tray icon lifecycle, double-click switching, and context menu.
+//! Win32 tray lifecycle, LMB volume flyout, mouse-wheel hook, double-click switching, and RMB menu.
 
 use crate::audio::{
     AudioDeviceInfo, AudioMonitor, AudioSnapshot, WM_APP_DEVICES_CHANGED, WM_APP_VOLUME_CHANGED,
@@ -9,11 +9,17 @@ use crate::config::{
 };
 use crate::icon::create_tray_hicon;
 use crate::policy_config::set_default_audio_endpoint;
+use crate::ui::{
+    DevicesDialog, VolumeFlyout, WM_APP_DEVICES_TOGGLE_ID, WM_APP_FLYOUT_SET_VOLUME,
+    WM_APP_FLYOUT_TOGGLE_MUTE, WM_APP_WHEEL_VOLUME,
+};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use windows::core::{BOOL, PCSTR, PCWSTR, Result};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use windows::core::{BOOL, GUID, PCSTR, PCWSTR, Result};
 use windows::Win32::Foundation::{FreeLibrary, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Graphics::Gdi::PtInRect;
 use windows::Win32::System::LibraryLoader::{
     GetModuleHandleW, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
 };
@@ -26,29 +32,38 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFYICONDATAW,
+    ShellExecuteW, Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP,
+    NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
-    DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, LoadCursorW, PostMessageW,
-    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SetForegroundWindow,
-    TrackPopupMenuEx, TranslateMessage, CW_USEDEFAULT, HICON, HMENU, IDC_ARROW, MF_CHECKED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SM_CXSMICON, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_DPICHANGED,
-    WM_ENDSESSION, WM_LBUTTONDBLCLK, WM_NULL, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_SETTINGCHANGE,
-    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    AppendMenuW, CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
+    DestroyMenu, DestroyWindow, DispatchMessageW, GetClassNameW, GetCursorPos, GetMessageW,
+    KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW,
+    RegisterWindowMessageW, SetForegroundWindow, SetTimer, SetWindowsHookExW, TrackPopupMenuEx,
+    TranslateMessage, UnhookWindowsHookEx, WindowFromPoint, CW_USEDEFAULT, HHOOK, HICON, HMENU,
+    IDC_ARROW, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
+    MSLLHOOKSTRUCT, SM_CXSMICON, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WH_MOUSE_LL, WM_APP, WM_DESTROY, WM_DPICHANGED, WM_ENDSESSION,
+    WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_NULL, WM_QUERYENDSESSION, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_APP_TRAY: u32 = WM_APP + 10;
 const TRAY_ICON_ID: u32 = 1;
+const TIMER_LMB_SINGLE_CLICK: usize = 1;
+const LMB_FLYOUT_DELAY_MS: u32 = 350;
+
 const WINDOW_CLASS_NAME: &str = "TinySinkTrayWindow";
 const PERSONALIZE_SUBKEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 const LIGHT_TASKBAR_VALUE: &str = "SystemUsesLightTheme";
 
-const CMD_TOGGLE_MUTE: u32 = 4001;
-const CMD_TOGGLE_AUTOSTART: u32 = 4002;
-const CMD_EXIT: u32 = 4003;
+const CMD_OPEN_DEVICES: u32 = 4001;
+const CMD_OPEN_WIN_TRAY_SETTINGS: u32 = 4002;
+const CMD_TOGGLE_AUTOSTART: u32 = 4003;
+const CMD_EXIT: u32 = 4004;
+
+/// Target tray window handle read by the low-level mouse hook for wheel scrolling.
+static HOOK_TRAY_HWND: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RenderKey {
@@ -61,9 +76,9 @@ struct RenderKey {
 
 enum MenuAction {
     SelectDevice(String),
-    ToggleCycleDevice(String),
+    OpenDevicesDialog,
     SetIconOverride(String, IconOverride),
-    ToggleMute,
+    OpenSystemVolumeSettings,
     ToggleAutostart,
     Exit,
 }
@@ -79,6 +94,9 @@ struct TrayState {
     last_render_key: Option<RenderKey>,
     last_tooltip: String,
     icon_added: bool,
+    mouse_hook: Option<HHOOK>,
+    flyout: Option<VolumeFlyout>,
+    devices_dialog: Option<DevicesDialog>,
 }
 
 impl TrayState {
@@ -103,6 +121,11 @@ impl TrayState {
             }
         }
 
+        HOOK_TRAY_HWND.store(hwnd.0 as usize, Ordering::Release);
+        let mouse_hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_ll_proc), None, 0).ok() };
+        let flyout = VolumeFlyout::create(hwnd);
+        let devices_dialog = DevicesDialog::create(hwnd);
+
         let mut state = Self {
             hwnd,
             taskbar_created_msg,
@@ -114,7 +137,11 @@ impl TrayState {
             last_render_key: None,
             last_tooltip: String::new(),
             icon_added: false,
+            mouse_hook,
+            flyout,
+            devices_dialog,
         };
+        state.sync_child_windows();
         state.update_tray_icon(true);
         Ok(state)
     }
@@ -122,6 +149,21 @@ impl TrayState {
     fn save_config_to_disk(&self) {
         if let Some(path) = self.config_path.as_deref() {
             let _ = save_config(path, &self.config);
+        }
+    }
+
+    fn sync_child_windows(&self) {
+        let kind = self.effective_default_kind();
+        if let Some(flyout) = &self.flyout {
+            flyout.sync_state(
+                &self.snapshot.default_device_name,
+                kind,
+                self.snapshot.volume_percent,
+                self.snapshot.muted,
+            );
+        }
+        if let Some(dlg) = &self.devices_dialog {
+            dlg.sync_devices(&self.snapshot.devices, &self.config);
         }
     }
 
@@ -136,6 +178,7 @@ impl TrayState {
         if self.config.ensure_cycle_initialized(&summaries) {
             self.save_config_to_disk();
         }
+        self.sync_child_windows();
         self.update_tray_icon(force_icon);
     }
 
@@ -143,6 +186,7 @@ impl TrayState {
         let (vol, muted) = self.audio.read_volume_and_mute();
         self.snapshot.volume_percent = vol;
         self.snapshot.muted = muted;
+        self.sync_child_windows();
         self.update_tray_icon(false);
     }
 
@@ -178,7 +222,8 @@ impl TrayState {
             return;
         }
 
-        let need_new_icon = force || !self.icon_added || self.last_render_key.as_ref() != Some(&key);
+        let need_new_icon =
+            force || !self.icon_added || self.last_render_key.as_ref() != Some(&key);
         let mut new_hicon: Option<HICON> = None;
 
         if need_new_icon {
@@ -219,6 +264,23 @@ impl TrayState {
         }
     }
 
+    fn show_volume_flyout(&mut self) {
+        self.refresh_audio_and_tray(false);
+        if let Some(flyout) = &self.flyout {
+            flyout.show_near_tray(self.hwnd, TRAY_ICON_ID);
+        }
+    }
+
+    fn hide_volume_flyout(&self) {
+        if let Some(flyout) = &self.flyout {
+            flyout.hide();
+        }
+    }
+
+    fn is_flyout_visible(&self) -> bool {
+        self.flyout.as_ref().is_some_and(VolumeFlyout::is_visible)
+    }
+
     fn cycle_next_device(&mut self) {
         self.snapshot = self.audio.snapshot();
         let active_ids: Vec<String> = self.snapshot.devices.iter().map(|d| d.id.clone()).collect();
@@ -237,14 +299,26 @@ impl TrayState {
         let mut actions: Vec<(u32, MenuAction)> = Vec::new();
         let mut next_id: u32 = 1000;
 
+        let selected_devices: Vec<&AudioDeviceInfo> = self
+            .snapshot
+            .devices
+            .iter()
+            .filter(|d| self.config.is_in_cycle(&d.id))
+            .collect();
+
         unsafe {
             let menu = CreatePopupMenu().ok()?;
 
-            if self.snapshot.devices.is_empty() {
-                let empty = to_wide_null("Нет активных устройств вывода");
-                let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(empty.as_ptr()));
+            if selected_devices.is_empty() {
+                let msg = if self.snapshot.devices.is_empty() {
+                    "Нет активных устройств вывода"
+                } else {
+                    "Устройства не выбраны (см. «Устройства...»)"
+                };
+                let wide = to_wide_null(msg);
+                let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(wide.as_ptr()));
             } else {
-                for dev in &self.snapshot.devices {
+                for dev in &selected_devices {
                     let cmd_id = next_id;
                     next_id += 1;
                     let kind = self.config.effective_kind(&dev.id, dev.detected_kind);
@@ -262,53 +336,28 @@ impl TrayState {
 
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
-            // Mute toggle for current device.
-            let mute_label = to_wide_null("Без звука (Mute)");
-            let mute_flags =
-                MF_STRING | if self.snapshot.muted { MF_CHECKED } else { MF_UNCHECKED };
+            // Non-closing checklist dialog for selecting managed devices.
+            let devices_label = to_wide_null("Устройства...");
             let _ = AppendMenuW(
                 menu,
-                mute_flags,
-                CMD_TOGGLE_MUTE as usize,
-                PCWSTR(mute_label.as_ptr()),
+                MF_STRING,
+                CMD_OPEN_DEVICES as usize,
+                PCWSTR(devices_label.as_ptr()),
             );
-            actions.push((CMD_TOGGLE_MUTE, MenuAction::ToggleMute));
+            actions.push((CMD_OPEN_DEVICES, MenuAction::OpenDevicesDialog));
 
-            // Submenu: SoundSwitch-style cycle list.
-            if let Ok(cycle_menu) = CreatePopupMenu() {
-                for dev in &self.snapshot.devices {
-                    let cmd_id = next_id;
-                    next_id += 1;
-                    let wide = to_wide_null(&dev.name);
-                    let checked = if self.config.is_in_cycle(&dev.id) {
-                        MF_CHECKED
-                    } else {
-                        MF_UNCHECKED
-                    };
-                    let _ = AppendMenuW(
-                        cycle_menu,
-                        MF_STRING | checked,
-                        cmd_id as usize,
-                        PCWSTR(wide.as_ptr()),
-                    );
-                    actions.push((cmd_id, MenuAction::ToggleCycleDevice(dev.id.clone())));
-                }
-                if self.snapshot.devices.is_empty() {
-                    let empty = to_wide_null("Нет устройств");
-                    let _ = AppendMenuW(cycle_menu, MF_STRING | MF_GRAYED, 0, PCWSTR(empty.as_ptr()));
-                }
-                let title = to_wide_null("Цикл переключения (2x клик)");
-                let _ = AppendMenuW(
-                    menu,
-                    MF_POPUP,
-                    cycle_menu.0 as usize,
-                    PCWSTR(title.as_ptr()),
-                );
-            }
-
-            // Submenu: manual icon override per device.
+            // Submenu: manual icon override per selected (or active) device.
+            let icon_targets: &[&AudioDeviceInfo] = &selected_devices;
             if let Ok(icons_menu) = CreatePopupMenu() {
-                for dev in &self.snapshot.devices {
+                let fallback_all: Vec<&AudioDeviceInfo>;
+                let list = if icon_targets.is_empty() {
+                    fallback_all = self.snapshot.devices.iter().collect();
+                    &fallback_all[..]
+                } else {
+                    icon_targets
+                };
+
+                for dev in list {
                     if let Ok(dev_menu) = CreatePopupMenu() {
                         let current_ovr = self.config.override_for(&dev.id);
                         let auto_kind = match dev.detected_kind {
@@ -345,9 +394,14 @@ impl TrayState {
                         );
                     }
                 }
-                if self.snapshot.devices.is_empty() {
+                if list.is_empty() {
                     let empty = to_wide_null("Нет устройств");
-                    let _ = AppendMenuW(icons_menu, MF_STRING | MF_GRAYED, 0, PCWSTR(empty.as_ptr()));
+                    let _ = AppendMenuW(
+                        icons_menu,
+                        MF_STRING | MF_GRAYED,
+                        0,
+                        PCWSTR(empty.as_ptr()),
+                    );
                 }
                 let title = to_wide_null("Тип значка устройства");
                 let _ = AppendMenuW(
@@ -359,6 +413,16 @@ impl TrayState {
             }
 
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+            // Safe link to Windows 10/11 system tray icons toggle page.
+            let sys_tray_label = to_wide_null("Системный значок громкости Windows...");
+            let _ = AppendMenuW(
+                menu,
+                MF_STRING,
+                CMD_OPEN_WIN_TRAY_SETTINGS as usize,
+                PCWSTR(sys_tray_label.as_ptr()),
+            );
+            actions.push((CMD_OPEN_WIN_TRAY_SETTINGS, MenuAction::OpenSystemVolumeSettings));
 
             // Autostart with Windows.
             let autostart_label = to_wide_null("Запускать с Windows");
@@ -395,18 +459,20 @@ impl TrayState {
                     self.refresh_audio_and_tray(false);
                 }
             }
-            MenuAction::ToggleCycleDevice(id) => {
-                self.config.toggle_cycle_device(&id);
-                self.save_config_to_disk();
+            MenuAction::OpenDevicesDialog => {
+                self.snapshot = self.audio.snapshot();
+                if let Some(dlg) = &self.devices_dialog {
+                    dlg.show(&self.snapshot.devices, &self.config);
+                }
             }
             MenuAction::SetIconOverride(id, ovr) => {
                 self.config.set_override(&id, ovr);
                 self.save_config_to_disk();
+                self.sync_child_windows();
                 self.update_tray_icon(true);
             }
-            MenuAction::ToggleMute => {
-                self.audio.toggle_mute();
-                self.refresh_volume_only();
+            MenuAction::OpenSystemVolumeSettings => {
+                open_windows_system_icons_settings();
             }
             MenuAction::ToggleAutostart => {
                 let target = !is_autostart_enabled();
@@ -416,6 +482,16 @@ impl TrayState {
                 let _ = DestroyWindow(self.hwnd);
             },
         }
+    }
+
+    fn cleanup_resources(&mut self) {
+        HOOK_TRAY_HWND.store(0, Ordering::Release);
+        if let Some(hhook) = self.mouse_hook.take() {
+            unsafe {
+                let _ = UnhookWindowsHookEx(hhook);
+            }
+        }
+        self.remove_tray_icon();
     }
 
     fn remove_tray_icon(&mut self) {
@@ -441,8 +517,98 @@ impl TrayState {
 
 impl Drop for TrayState {
     fn drop(&mut self) {
-        self.remove_tray_icon();
+        self.cleanup_resources();
     }
+}
+
+fn open_windows_system_icons_settings() {
+    let verb = to_wide_null("open");
+    let file = to_wide_null("explorer.exe");
+    let params = to_wide_null("shell:::{05d7b0f4-2121-4eff-bf6b-ed3f69b894d9}");
+    unsafe {
+        let res = ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR(params.as_ptr()),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
+        if (res.0 as isize) <= 32 {
+            let fallback = to_wide_null("ms-settings:taskbar");
+            let _ = ShellExecuteW(
+                None,
+                PCWSTR(verb.as_ptr()),
+                PCWSTR(fallback.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            );
+        }
+    }
+}
+
+/// Converts a raw Win32 wheel delta (`120` per notch) into a `±2%` volume step.
+pub fn wheel_step_from_delta(delta: i16) -> i16 {
+    if delta == 0 {
+        return 0;
+    }
+    let notches = if delta > 0 {
+        (delta as i32 + 119) / 120
+    } else {
+        (delta as i32 - 119) / 120
+    };
+    (notches * 2).clamp(-100, 100) as i16
+}
+
+fn is_cursor_over_tray_toolbar(pt: POINT) -> bool {
+    unsafe {
+        let target = WindowFromPoint(pt);
+        if target.is_invalid() {
+            return false;
+        }
+        let mut buf = [0u16; 64];
+        let len = GetClassNameW(target, &mut buf);
+        if len <= 0 {
+            return false;
+        }
+        String::from_utf16_lossy(&buf[..len as usize]) == "ToolbarWindow32"
+    }
+}
+
+unsafe extern "system" fn mouse_ll_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if ncode >= 0 && wparam.0 as u32 == WM_MOUSEWHEEL && lparam.0 != 0 {
+        let tray_raw = HOOK_TRAY_HWND.load(Ordering::Relaxed);
+        if tray_raw != 0 {
+            let ms = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+            let tray_hwnd = HWND(tray_raw as *mut _);
+            let nii = NOTIFYICONIDENTIFIER {
+                cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
+                hWnd: tray_hwnd,
+                uID: TRAY_ICON_ID,
+                guidItem: GUID::zeroed(),
+            };
+            if let Ok(rect) = Shell_NotifyIconGetRect(&nii) {
+                if rect.right > rect.left
+                    && rect.bottom > rect.top
+                    && PtInRect(&rect, ms.pt).as_bool()
+                    && is_cursor_over_tray_toolbar(ms.pt)
+                {
+                    let delta = ((ms.mouseData >> 16) as u16) as i16;
+                    if delta != 0 {
+                        let _ = PostMessageW(
+                            Some(tray_hwnd),
+                            WM_APP_WHEEL_VOLUME,
+                            WPARAM(delta as isize as usize),
+                            LPARAM(0),
+                        );
+                        return LRESULT(1);
+                    }
+                }
+            }
+        }
+    }
+    CallNextHookEx(None, ncode, wparam, lparam)
 }
 
 fn build_tooltip(snapshot: &AudioSnapshot, kind: DeviceKind) -> String {
@@ -473,7 +639,6 @@ fn write_tooltip_utf16(dest: &mut [u16; 128], text: &str) {
         dest[written] = unit;
         written += 1;
     }
-    // Avoid dangling high surrogate if truncated mid-pair.
     if written > 0 && (0xD800..=0xDBFF).contains(&dest[written - 1]) {
         dest[written - 1] = 0;
     }
@@ -530,8 +695,6 @@ fn is_light_taskbar_theme() -> bool {
 }
 
 fn enable_adaptive_dark_mode(hwnd: Option<HWND>) {
-    // Undocumented uxtheme.dll ordinals (133/135/136) used since Windows 10 1903
-    // to let native Win32 popup menus follow Windows Dark/Light app theme.
     let lib_name = to_wide_null("uxtheme.dll");
     unsafe {
         let Ok(hmod) = LoadLibraryExW(
@@ -576,16 +739,13 @@ unsafe extern "system" fn wnd_proc(
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<TrayState>;
 
     if !ptr.is_null() {
-        // Clone an owned Rc guard so TrayState remains valid even if WM_DESTROY fires inside a modal menu loop.
         Rc::increment_strong_count(ptr);
         let state_rc = Rc::from_raw(ptr);
 
-        let taskbar_match = {
-            if let Ok(state) = state_rc.try_borrow() {
-                msg == state.taskbar_created_msg && state.taskbar_created_msg != 0
-            } else {
-                false
-            }
+        let taskbar_match = if let Ok(state) = state_rc.try_borrow() {
+            msg == state.taskbar_created_msg && state.taskbar_created_msg != 0
+        } else {
+            false
         };
 
         if taskbar_match {
@@ -609,11 +769,56 @@ unsafe extern "system" fn wnd_proc(
                 }
                 return LRESULT(0);
             }
+            WM_APP_FLYOUT_SET_VOLUME => {
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    let pct = wparam.0.min(100) as u8;
+                    state.audio.set_volume_percent(pct, true);
+                    state.refresh_volume_only();
+                }
+                return LRESULT(0);
+            }
+            WM_APP_FLYOUT_TOGGLE_MUTE => {
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    state.audio.toggle_mute();
+                    state.refresh_volume_only();
+                }
+                return LRESULT(0);
+            }
+            WM_APP_WHEEL_VOLUME => {
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    let delta = (wparam.0 as isize) as i16;
+                    let step = wheel_step_from_delta(delta);
+                    state.audio.adjust_volume_percent(step);
+                    state.refresh_volume_only();
+                }
+                return LRESULT(0);
+            }
+            WM_APP_DEVICES_TOGGLE_ID => {
+                if lparam.0 != 0 {
+                    let device_id = *Box::from_raw(lparam.0 as *mut String);
+                    if let Ok(mut state) = state_rc.try_borrow_mut() {
+                        state.config.toggle_cycle_device(&device_id);
+                        state.save_config_to_disk();
+                        state.sync_child_windows();
+                    }
+                }
+                return LRESULT(0);
+            }
+            WM_TIMER => {
+                if wparam.0 == TIMER_LMB_SINGLE_CLICK {
+                    let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
+                    if let Ok(mut state) = state_rc.try_borrow_mut() {
+                        state.show_volume_flyout();
+                    }
+                }
+                return LRESULT(0);
+            }
             WM_SETTINGCHANGE | WM_DPICHANGED => {
                 if msg == WM_SETTINGCHANGE {
                     enable_adaptive_dark_mode(Some(hwnd));
                 }
                 if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    state.sync_child_windows();
                     state.update_tray_icon(false);
                 }
                 return LRESULT(0);
@@ -621,12 +826,33 @@ unsafe extern "system" fn wnd_proc(
             WM_APP_TRAY => {
                 let mouse_event = (lparam.0 as u32) & 0xFFFF;
                 match mouse_event {
+                    WM_LBUTTONUP => {
+                        if let Ok(state) = state_rc.try_borrow() {
+                            if state.is_flyout_visible() {
+                                let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
+                                state.hide_volume_flyout();
+                            } else {
+                                let _ = SetTimer(
+                                    Some(hwnd),
+                                    TIMER_LMB_SINGLE_CLICK,
+                                    LMB_FLYOUT_DELAY_MS,
+                                    None,
+                                );
+                            }
+                        }
+                    }
                     WM_LBUTTONDBLCLK => {
+                        let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
                         if let Ok(mut state) = state_rc.try_borrow_mut() {
+                            state.hide_volume_flyout();
                             state.cycle_next_device();
                         }
                     }
                     WM_RBUTTONUP => {
+                        let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
+                        if let Ok(state) = state_rc.try_borrow() {
+                            state.hide_volume_flyout();
+                        }
                         let built = state_rc
                             .try_borrow_mut()
                             .ok()
@@ -663,20 +889,21 @@ unsafe extern "system" fn wnd_proc(
                 }
                 return LRESULT(0);
             }
-            WM_QUERYENDSESSION => {
-                return LRESULT(1);
-            }
+            WM_QUERYENDSESSION => return LRESULT(1),
             WM_ENDSESSION => {
                 if wparam.0 != 0 {
                     if let Ok(mut state) = state_rc.try_borrow_mut() {
-                        state.remove_tray_icon();
+                        state.cleanup_resources();
                     }
                 }
                 return LRESULT(0);
             }
             WM_DESTROY => {
+                let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    state.cleanup_resources();
+                }
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                // Release the ownership reference stored in GWLP_USERDATA.
                 let _owned = Rc::from_raw(ptr);
                 PostQuitMessage(0);
                 return LRESULT(0);
@@ -747,3 +974,18 @@ pub fn run_app() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::wheel_step_from_delta;
+
+    #[test]
+    fn wheel_delta_maps_to_two_percent_steps() {
+        assert_eq!(wheel_step_from_delta(0), 0);
+        assert_eq!(wheel_step_from_delta(120), 2);
+        assert_eq!(wheel_step_from_delta(-120), -2);
+        assert_eq!(wheel_step_from_delta(240), 4);
+        assert_eq!(wheel_step_from_delta(-240), -4);
+        assert_eq!(wheel_step_from_delta(30), 2);
+        assert_eq!(wheel_step_from_delta(-30), -2);
+    }
+}

@@ -88,3 +88,4 @@ fn search_sdk_bin(bin_dir: &Path, arch_dir: &str) -> Option<PathBuf> {
     }
     None
 }
+
