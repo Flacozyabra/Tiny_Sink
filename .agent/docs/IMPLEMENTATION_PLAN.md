@@ -1,4 +1,4 @@
-# План реализации Volume Smart Icon
+# План реализации Tiny_Sink (ранее Volume Smart Icon)
 
 ## Цель
 Создать легковесное минималистичное Windows-приложение на Rust (`x86_64-pc-windows-msvc`), которое:
@@ -13,8 +13,8 @@
    - Минимальные зависимости: `windows` (Win32 API, Core Audio WASAPI/MMDevice, GDI), `windows-core`, `serde` + `serde_json` для конфига.
    - Профиль сборки `release` с оптимизацией размера (`opt-level = "s"`, `lto = true`, `strip = true`, `panic = "abort"`).
 2. **[Completed] Конфигурация и автозапуск** (`src/config.rs`):
-   - Хранение в `%APPDATA%\VolumeSmartIcon\config.json`: список ID устройств для цикла двойного клика (`cycle_device_ids`), флаг первичной инициализации, ручные переопределения типа иконки (`Auto` / `Headphones` / `Speakers`).
-   - Управление автозапуском через реестр `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+   - Хранение в `%APPDATA%\Tiny_Sink\config.json`: список ID устройств для цикла двойного клика (`cycle_device_ids`), флаг первичной инициализации, ручные переопределения типа иконки (`Auto` / `Headphones` / `Speakers`).
+   - Управление автозапуском через реестр `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Tiny_Sink`.
 3. **[Completed] Переключение устройства вывода** (`src/policy_config.rs`):
    - Безопасная COM-обёртка над `IPolicyConfig` (и резервный `IPolicyConfigVista`) для вызова `SetDefaultEndpoint` по ролям `eConsole`, `eMultimedia`, `eCommunications`.
 4. **[Completed] Мониторинг аудио без фонового опроса** (`src/audio.rs`):

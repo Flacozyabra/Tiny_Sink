@@ -1,4 +1,4 @@
-//! Entry point for Volume Smart Icon: COM initialization, single-instance guard, and tray loop.
+//! Entry point for Tiny_Sink: COM initialization, single-instance guard, and tray loop.
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
@@ -14,7 +14,7 @@ use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::Threading::CreateMutexW;
 
-const SINGLE_INSTANCE_MUTEX: &str = "Local\\VolumeSmartIconSingleInstanceMutex";
+const SINGLE_INSTANCE_MUTEX: &str = "Local\\TinySinkSingleInstanceMutex";
 
 struct ComGuard;
 

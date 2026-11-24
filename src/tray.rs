@@ -40,7 +40,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const WM_APP_TRAY: u32 = WM_APP + 10;
 const TRAY_ICON_ID: u32 = 1;
-const WINDOW_CLASS_NAME: &str = "VolumeSmartIconTrayWindow";
+const WINDOW_CLASS_NAME: &str = "TinySinkTrayWindow";
 const PERSONALIZE_SUBKEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 const LIGHT_TASKBAR_VALUE: &str = "SystemUsesLightTheme";
 
@@ -669,7 +669,7 @@ pub fn run_app() -> Result<()> {
             return Err(windows::core::Error::from_thread());
         }
 
-        let title = to_wide_null("Volume Smart Icon");
+        let title = to_wide_null("Tiny_Sink");
         let hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW,
             PCWSTR(class_name.as_ptr()),

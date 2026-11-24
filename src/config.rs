@@ -11,10 +11,10 @@ use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
 };
 
-const APP_DIR_NAME: &str = "VolumeSmartIcon";
+const APP_DIR_NAME: &str = "Tiny_Sink";
 const CONFIG_FILE_NAME: &str = "config.json";
 const RUN_SUBKEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-const RUN_VALUE_NAME: &str = "VolumeSmartIcon";
+const RUN_VALUE_NAME: &str = "Tiny_Sink";
 
 /// Visual category of an audio output endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn config_round_trips_json() {
-        let dir = std::env::temp_dir().join("volume_smart_icon_test_cfg");
+        let dir = std::env::temp_dir().join("tiny_sink_test_cfg");
         let _ = fs::remove_dir_all(&dir);
         let path = dir.join("config.json");
 

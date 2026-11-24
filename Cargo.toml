@@ -1,8 +1,12 @@
 [package]
-name = "volume_smart_icon"
+name = "tiny_sink"
 version = "0.1.0"
 edition = "2021"
 description = "Lightweight Windows system tray app showing output device type and volume, with SoundSwitch-style double-click device switching."
+
+[[bin]]
+name = "Tiny_Sink"
+path = "src/main.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
