@@ -2,7 +2,7 @@
 
 ## English
 
-- **Dynamic tray icon** — shows headphones or speakers, live volume (`0–100`), and **Mute** state; adapts to taskbar DPI and light/dark Windows themes.
+- **Dynamic tray icon** — shows the active output device type (headphones or speakers), live volume (`0–100`), and **Mute** state; adapts to taskbar DPI and light/dark Windows themes.
 - **Mouse controls**:
   - **Left-click** — compact volume flyout slider above the tray (with mute toggle and wheel support).
   - **Double-click** — cycle through checked playback devices.
@@ -14,7 +14,7 @@
 
 ## Русский
 
-- **Динамическая иконка в трее** — отображает наушники или колонки, громкость (`0–100`) и **Mute**; подстраивается под DPI панели задач и светлую/тёмную тему Windows.
+- **Динамическая иконка в трее** — отображает тип активного сейчас устройства вывода (наушники или колонки), громкость (`0–100`) и **Mute**; подстраивается под DPI панели задач и светлую/тёмную тему Windows.
 - **Управление мышью**:
   - **ЛКМ** — компактный регулятор громкости над треем (ползунок, Mute и прокрутка).
   - **Двойной ЛКМ** — циклическое переключение отмеченных устройств вывода.
