@@ -2,22 +2,32 @@
 
 ## English
 
-- **Dynamic tray icon** — shows the active output device type (headphones or speakers), live volume (`0–100`), and **Mute** state; adapts to taskbar DPI and light/dark Windows themes.
-- **Mouse controls**:
-  - **Left-click** — compact volume flyout slider above the tray (with mute toggle and wheel support).
-  - **Double-click** — cycle through checked playback devices.
-  - **Scroll wheel** — adjust volume by `±2%` (auto-unmutes when scrolling up).
-- **Context menu (right-click)** — quick device list, **Devices...** persistent checklist, **Device icon type** override (`Auto` / `Headphones` / `Speakers`), **Start with Windows**, Windows volume icon shortcut, and **Update** submenu (auto-check & one-click `SHA-256` verified updates).
-- **Lightweight** — native Win32 + Core Audio API, event-driven with zero polling, single portable `.exe`.
+Windows always shows the same speaker icon in the tray, so you can't tell at a glance whether sound is going to your **headphones** or **speakers**. **TinySink** displays the active output device icon (`headphones` or `speakers`) with live volume (`0–100` / Mute) right in the tray and switches outputs with a **double-click**.
+
+**Quick start**
+1. Right-click the tray icon *(if hidden under `^`, drag it onto the taskbar)* → **Devices...** and check only the outputs you want to switch between (e.g., headphones and speakers).
+2. If an icon type is detected wrong, override it via **Right-click → Device icon type** (`Auto` / `Headphones` / `Speakers`).
+3. *(Optional)* Enable **Start with Windows**, hide the built-in Windows icon via **Windows system volume icon...**, and check for new versions in **Update**.
+
+**Controls**
+- **Left-click** — volume slider & Mute popup
+- **Double-click** — cycle through checked output devices
+- **Scroll wheel** (over icon) — adjust volume by `±2%` (unmutes on scroll up)
+- **Right-click** — direct device list & settings
 
 ---
 
 ## Русский
 
-- **Динамическая иконка в трее** — отображает тип активного сейчас устройства вывода (наушники или колонки), громкость (`0–100`) и **Mute**; подстраивается под DPI панели задач и светлую/тёмную тему Windows.
-- **Управление мышью**:
-  - **ЛКМ** — компактный регулятор громкости над треем (ползунок, Mute и прокрутка).
-  - **Двойной ЛКМ** — циклическое переключение отмеченных устройств вывода.
-  - **Колёсико мыши** — изменение громкости с шагом `2%` (автоснятие Mute при увеличении).
-- **Контекстное меню (ПКМ)** — быстрый выбор устройства, окно **Devices...** с чекбоксами, выбор типа иконки (**Device icon type**: `Auto` / `Headphones` / `Speakers`), **Start with Windows**, переход в настройки громкости Windows и подменю **Update** (автопроверка и обновление в один клик с проверкой `SHA-256`).
-- **Минимальные ресурсы** — чистый Win32 + Core Audio API без фонового опроса, один портативный `.exe`.
+Стандартный значок Windows в трее всегда выглядит одинаково — сходу не видно, куда сейчас идёт звук (в **наушники** или в **колонки**). **TinySink** показывает в трее иконку активного сейчас устройства (`наушники` или `колонки`) и уровень громкости (`0–100` / Mute), а также переключает выбранные устройства по **двойному клику**.
+
+**Быстрый старт**
+1. Нажмите **ПКМ** по иконке в трее *(если спряталась под `^`, вытащите на панель задач)* → **Devices...** и оставьте галочки только на тех устройствах, между которыми нужно переключаться (например, наушники и колонки).
+2. Если значок определился неверно — поправьте через **ПКМ → Device icon type** (`Auto` / `Headphones` / `Speakers`).
+3. *(По желанию)* Включите **Start with Windows**, скройте стандартную иконку через **Windows system volume icon...** и обновляйтесь в один клик через **Update**.
+
+**Управление**
+- **ЛКМ** — ползунок громкости и Mute
+- **Двойной ЛКМ** — переключение между отмеченными устройствами
+- **Колёсико мыши** (над иконкой) — громкость `±2%` (снимает Mute при увеличении)
+- **ПКМ** — список выбранных устройств и настройки
