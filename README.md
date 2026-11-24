@@ -26,3 +26,6 @@ cargo build --release
 ```
 Готовый исполняемый файл: `target\release\Tiny_Sink.exe`.
 
+## Лицензия
+Проект распространяется под лицензией [MIT](LICENSE).
+

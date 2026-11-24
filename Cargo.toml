@@ -2,6 +2,8 @@
 name = "tiny_sink"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/Flacozyabra/Tiny_Sink"
 description = "Lightweight Windows system tray app showing output device type and volume, with SoundSwitch-style double-click device switching."
 
 [[bin]]
