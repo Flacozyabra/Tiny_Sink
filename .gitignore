@@ -3,11 +3,20 @@
 
 # Rust build artifacts
 /target/
+/dist/
 **/*.rs.bk
 *.pdb
 *.exe
+*.zip
 
-# Local IDE / OS files
+# Local IDE / OS / config files
+.vscode/
+.idea/
+*.user
+*.suo
+.env
+config.json
+*.tmp
 .DS_Store
 Thumbs.db
 *.swp
