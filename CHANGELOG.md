@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+- Добавлена адаптивная тёмная тема контекстного меню Windows (`AllowDark` через `uxtheme.dll`) с обновлением при смене системной темы.
+- Добавлена многоразмерная иконка приложения `assets/Tiny_Sink.ico` (16–256 px) и ресурсы версии, встраиваемые в `Tiny_Sink.exe` через `build.rs` и `rc.exe`.
+
 ### Changed
 - Проект переименован в `Tiny_Sink`: пакет Cargo `tiny_sink`, исполняемый файл `Tiny_Sink.exe`, папка конфига `%APPDATA%\Tiny_Sink\config.json`, ключ автозапуска `Tiny_Sink`, внутренние идентификаторы окна и мьютекса.
 

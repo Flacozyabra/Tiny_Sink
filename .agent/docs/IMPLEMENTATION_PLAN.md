@@ -29,6 +29,10 @@
    - Защита от повторного запуска (`CreateMutexW`).
    - Скрытое Win32-окно + `Shell_NotifyIconW`, восстановление иконки при перезапуске Explorer (`TaskbarCreated`), обновление при смене темы/DPI (`WM_SETTINGCHANGE`, `WM_DPICHANGED`).
    - Двойной клик (`WM_LBUTTONDBLCLK`) переключает следующее устройство из отмеченного списка; ПКМ (`WM_RBUTTONUP`) открывает нативное меню.
+- **[Completed] Полировка UX и ресурсов** (`assets/Tiny_Sink.ico`, `assets/Tiny_Sink.rc`, `build.rs`, `src/tray.rs`):
+  - Встроена многоразмерная иконка (`16/24/32/48/256 px`) и `VERSIONINFO` в `Tiny_Sink.exe` через `build.rs` + `rc.exe`.
+  - Включена адаптивная тёмная тема контекстного меню (`uxtheme.dll` `AllowDark` + `FlushMenuThemes`).
+
 7. **[Completed] Тестирование и документация** (`README.md`, `CHANGELOG.md`):
    - Модульные тесты (`cargo test`) логики выбора устройств, определения типа по имени/FormFactor, сериализации конфига и рендеринга иконок во всех диапазонах и размерах.
    - Проверка релизной сборки и прогон на локальной системе.
