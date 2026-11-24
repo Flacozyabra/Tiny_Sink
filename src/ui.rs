@@ -5,6 +5,7 @@ use crate::config::{to_wide_null, AppConfig, DeviceKind};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 use windows::core::{GUID, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
@@ -298,6 +299,7 @@ struct FlyoutState {
     muted: bool,
     dragging: bool,
     hover_mute: bool,
+    last_deactivated: Option<Instant>,
 }
 
 impl FlyoutState {
@@ -722,6 +724,7 @@ impl VolumeFlyout {
                 muted: false,
                 dragging: false,
                 hover_mute: false,
+                last_deactivated: None,
             }));
             let raw = Rc::into_raw(Rc::clone(&state));
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
@@ -733,6 +736,14 @@ impl VolumeFlyout {
 
     pub fn is_visible(&self) -> bool {
         unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(self.hwnd).as_bool() }
+    }
+
+    pub fn was_recently_deactivated(&self, window: Duration) -> bool {
+        self.state
+            .try_borrow()
+            .ok()
+            .and_then(|s| s.last_deactivated)
+            .is_some_and(|t| t.elapsed() <= window)
     }
 
     pub fn hide(&self) {
@@ -756,6 +767,9 @@ impl VolumeFlyout {
     }
 
     pub fn show_near_tray(&self, tray_hwnd: HWND, tray_icon_id: u32) {
+        if let Ok(mut s) = self.state.try_borrow_mut() {
+            s.last_deactivated = None;
+        }
         apply_dwm_style(self.hwnd, true);
         let dpi = window_dpi(self.hwnd);
         let w = scale_px(FLYOUT_LOGICAL_W, dpi);
@@ -968,6 +982,7 @@ unsafe extern "system" fn flyout_wnd_proc(
             WM_ACTIVATE => {
                 if (wparam.0 & 0xFFFF) == 0 {
                     if let Ok(mut state) = state_rc.try_borrow_mut() {
+                        state.last_deactivated = Some(Instant::now());
                         if state.dragging {
                             state.dragging = false;
                             let _ = ReleaseCapture();

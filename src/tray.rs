@@ -17,6 +17,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use windows::core::{BOOL, GUID, PCSTR, PCWSTR, Result};
 use windows::Win32::Foundation::{FreeLibrary, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::PtInRect;
@@ -31,6 +32,7 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi, SetProcessDpiAwarenessContext,
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::Shell::{
     ShellExecuteW, Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP,
     NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER,
@@ -44,14 +46,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IDC_ARROW, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
     MSLLHOOKSTRUCT, SM_CXSMICON, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, WH_MOUSE_LL, WM_APP, WM_DESTROY, WM_DPICHANGED, WM_ENDSESSION,
-    WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_NULL, WM_QUERYENDSESSION, WM_RBUTTONUP,
-    WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_NULL, WM_QUERYENDSESSION,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_APP_TRAY: u32 = WM_APP + 10;
 const TRAY_ICON_ID: u32 = 1;
 const TIMER_LMB_SINGLE_CLICK: usize = 1;
-const LMB_FLYOUT_DELAY_MS: u32 = 350;
 
 const WINDOW_CLASS_NAME: &str = "TinySinkTrayWindow";
 const PERSONALIZE_SUBKEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
@@ -97,6 +98,8 @@ struct TrayState {
     mouse_hook: Option<HHOOK>,
     flyout: Option<VolumeFlyout>,
     devices_dialog: Option<DevicesDialog>,
+    ignore_next_lbutton_up: bool,
+    suppress_flyout_on_up: bool,
 }
 
 impl TrayState {
@@ -140,6 +143,8 @@ impl TrayState {
             mouse_hook,
             flyout,
             devices_dialog,
+            ignore_next_lbutton_up: false,
+            suppress_flyout_on_up: false,
         };
         state.sync_child_windows();
         state.update_tray_icon(true);
@@ -279,6 +284,12 @@ impl TrayState {
 
     fn is_flyout_visible(&self) -> bool {
         self.flyout.as_ref().is_some_and(VolumeFlyout::is_visible)
+    }
+
+    fn flyout_was_recently_deactivated(&self) -> bool {
+        self.flyout
+            .as_ref()
+            .is_some_and(|f| f.was_recently_deactivated(Duration::from_millis(250)))
     }
 
     fn cycle_next_device(&mut self) {
@@ -524,7 +535,7 @@ impl Drop for TrayState {
 fn open_windows_system_icons_settings() {
     let verb = to_wide_null("open");
     let file = to_wide_null("explorer.exe");
-    let params = to_wide_null("shell:::{05d7b0f4-2121-4eff-bf6b-ed3f69b894d9}");
+    let params = to_wide_null("shell:::{05d7b0f4-2121-4eff-bf6b-ed3f69b894d9}\\SystemIcons");
     unsafe {
         let res = ShellExecuteW(
             None,
@@ -546,6 +557,10 @@ fn open_windows_system_icons_settings() {
             );
         }
     }
+}
+
+fn single_click_delay_ms() -> u32 {
+    unsafe { GetDoubleClickTime() }.clamp(350, 500)
 }
 
 /// Converts a raw Win32 wheel delta (`120` per notch) into a `±2%` volume step.
@@ -826,16 +841,27 @@ unsafe extern "system" fn wnd_proc(
             WM_APP_TRAY => {
                 let mouse_event = (lparam.0 as u32) & 0xFFFF;
                 match mouse_event {
+                    WM_LBUTTONDOWN => {
+                        if let Ok(mut state) = state_rc.try_borrow_mut() {
+                            state.ignore_next_lbutton_up = false;
+                            state.suppress_flyout_on_up =
+                                state.is_flyout_visible() || state.flyout_was_recently_deactivated();
+                        }
+                    }
                     WM_LBUTTONUP => {
-                        if let Ok(state) = state_rc.try_borrow() {
-                            if state.is_flyout_visible() {
+                        if let Ok(mut state) = state_rc.try_borrow_mut() {
+                            if state.ignore_next_lbutton_up {
+                                state.ignore_next_lbutton_up = false;
+                                state.suppress_flyout_on_up = false;
+                            } else if state.suppress_flyout_on_up {
+                                state.suppress_flyout_on_up = false;
                                 let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
                                 state.hide_volume_flyout();
                             } else {
                                 let _ = SetTimer(
                                     Some(hwnd),
                                     TIMER_LMB_SINGLE_CLICK,
-                                    LMB_FLYOUT_DELAY_MS,
+                                    single_click_delay_ms(),
                                     None,
                                 );
                             }
@@ -844,13 +870,18 @@ unsafe extern "system" fn wnd_proc(
                     WM_LBUTTONDBLCLK => {
                         let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
                         if let Ok(mut state) = state_rc.try_borrow_mut() {
+                            // Suppress the trailing WM_LBUTTONUP from releasing the second click.
+                            state.ignore_next_lbutton_up = true;
+                            state.suppress_flyout_on_up = false;
                             state.hide_volume_flyout();
                             state.cycle_next_device();
                         }
                     }
                     WM_RBUTTONUP => {
                         let _ = KillTimer(Some(hwnd), TIMER_LMB_SINGLE_CLICK);
-                        if let Ok(state) = state_rc.try_borrow() {
+                        if let Ok(mut state) = state_rc.try_borrow_mut() {
+                            state.ignore_next_lbutton_up = false;
+                            state.suppress_flyout_on_up = false;
                             state.hide_volume_flyout();
                         }
                         let built = state_rc
