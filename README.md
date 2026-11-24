@@ -1,6 +1,6 @@
 # <img src="assets/Tiny_Sink.png" align="left" width="88" height="88" alt="">&nbsp;TinySink
 
-&nbsp;&nbsp;Tiny Windows tray volume indicator & double-click audio output switcher in Rust.<br clear="left">
+&nbsp;&nbsp;Tiny Windows tray app in Rust: shows headphones/speakers & volume, switches output on double-click.<br clear="left">
 
 [English](#english) · [Русский](#русский)
 

@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/Flacozyabra/Tiny_Sink"
-description = "Tiny Windows tray volume indicator & double-click audio output switcher in Rust."
+description = "Tiny Windows tray app in Rust: shows headphones/speakers & volume, switches output on double-click."
 
 [[bin]]
 name = "Tiny_Sink"
