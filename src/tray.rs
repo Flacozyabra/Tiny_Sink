@@ -534,28 +534,18 @@ impl Drop for TrayState {
 
 fn open_windows_system_icons_settings() {
     let verb = to_wide_null("open");
-    let file = to_wide_null("explorer.exe");
-    let params = to_wide_null("shell:::{05d7b0f4-2121-4eff-bf6b-ed3f69b894d9}\\SystemIcons");
+    let target = to_wide_null("ms-settings:taskbar");
     unsafe {
-        let res = ShellExecuteW(
+        // Use modern UWP Settings (SystemSettings.exe) instead of legacy taskbarcpl.dll
+        // which triggers an explorer.exe crash on minute ticks in Windows 10 19041.
+        let _ = ShellExecuteW(
             None,
             PCWSTR(verb.as_ptr()),
-            PCWSTR(file.as_ptr()),
-            PCWSTR(params.as_ptr()),
+            PCWSTR(target.as_ptr()),
+            PCWSTR::null(),
             PCWSTR::null(),
             SW_SHOWNORMAL,
         );
-        if (res.0 as isize) <= 32 {
-            let fallback = to_wide_null("ms-settings:taskbar");
-            let _ = ShellExecuteW(
-                None,
-                PCWSTR(verb.as_ptr()),
-                PCWSTR(fallback.as_ptr()),
-                PCWSTR::null(),
-                PCWSTR::null(),
-                SW_SHOWNORMAL,
-            );
-        }
     }
 }
 
@@ -576,18 +566,21 @@ pub fn wheel_step_from_delta(delta: i16) -> i16 {
     (notches * 2).clamp(-100, 100) as i16
 }
 
+const TOOLBAR_CLASS_UTF16: [u16; 15] = [
+    b'T' as u16, b'o' as u16, b'o' as u16, b'l' as u16, b'b' as u16, b'a' as u16, b'r' as u16,
+    b'W' as u16, b'i' as u16, b'n' as u16, b'd' as u16, b'o' as u16, b'w' as u16, b'3' as u16,
+    b'2' as u16,
+];
+
 fn is_cursor_over_tray_toolbar(pt: POINT) -> bool {
     unsafe {
         let target = WindowFromPoint(pt);
         if target.is_invalid() {
             return false;
         }
-        let mut buf = [0u16; 64];
+        let mut buf = [0u16; 32];
         let len = GetClassNameW(target, &mut buf);
-        if len <= 0 {
-            return false;
-        }
-        String::from_utf16_lossy(&buf[..len as usize]) == "ToolbarWindow32"
+        len == TOOLBAR_CLASS_UTF16.len() as i32 && buf[..len as usize] == TOOLBAR_CLASS_UTF16
     }
 }
 
@@ -596,28 +589,30 @@ unsafe extern "system" fn mouse_ll_proc(ncode: i32, wparam: WPARAM, lparam: LPAR
         let tray_raw = HOOK_TRAY_HWND.load(Ordering::Relaxed);
         if tray_raw != 0 {
             let ms = &*(lparam.0 as *const MSLLHOOKSTRUCT);
-            let tray_hwnd = HWND(tray_raw as *mut _);
-            let nii = NOTIFYICONIDENTIFIER {
-                cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
-                hWnd: tray_hwnd,
-                uID: TRAY_ICON_ID,
-                guidItem: GUID::zeroed(),
-            };
-            if let Ok(rect) = Shell_NotifyIconGetRect(&nii) {
-                if rect.right > rect.left
-                    && rect.bottom > rect.top
-                    && PtInRect(&rect, ms.pt).as_bool()
-                    && is_cursor_over_tray_toolbar(ms.pt)
-                {
-                    let delta = ((ms.mouseData >> 16) as u16) as i16;
-                    if delta != 0 {
-                        let _ = PostMessageW(
-                            Some(tray_hwnd),
-                            WM_APP_WHEEL_VOLUME,
-                            WPARAM(delta as isize as usize),
-                            LPARAM(0),
-                        );
-                        return LRESULT(1);
+            // Filter non-tray scrolls locally before any cross-process Shell_NotifyIconGetRect call.
+            if is_cursor_over_tray_toolbar(ms.pt) {
+                let tray_hwnd = HWND(tray_raw as *mut _);
+                let nii = NOTIFYICONIDENTIFIER {
+                    cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
+                    hWnd: tray_hwnd,
+                    uID: TRAY_ICON_ID,
+                    guidItem: GUID::zeroed(),
+                };
+                if let Ok(rect) = Shell_NotifyIconGetRect(&nii) {
+                    if rect.right > rect.left
+                        && rect.bottom > rect.top
+                        && PtInRect(&rect, ms.pt).as_bool()
+                    {
+                        let delta = ((ms.mouseData >> 16) as u16) as i16;
+                        if delta != 0 {
+                            let _ = PostMessageW(
+                                Some(tray_hwnd),
+                                WM_APP_WHEEL_VOLUME,
+                                WPARAM(delta as isize as usize),
+                                LPARAM(0),
+                            );
+                            return LRESULT(1);
+                        }
                     }
                 }
             }
